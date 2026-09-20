@@ -1082,7 +1082,6 @@ function Register({ setTab, viewPass }) {
         <h3 className="panel-title">
           <Icons.Register /> Register New Visitor
         </h3>
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>* Required information</span>
       </div>
       <div className="panel-body">
         {msg && (
