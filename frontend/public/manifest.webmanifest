@@ -1,5 +1,5 @@
 {
-  "short_name": "Swagatham VAMS",
+  "short_name": "Swagatham VMS",
   "name": "Swagatham Visitor Management System",
   "description": "Visitor entry management, acknowledgement notifications, and real-time pass tracking",
   "id": "/",
@@ -9,7 +9,10 @@
   "orientation": "portrait",
   "background_color": "#0f172a",
   "theme_color": "#1e3a8a",
-  "categories": ["business", "utilities"],
+  "categories": [
+    "business",
+    "utilities"
+  ],
   "icons": [
     {
       "src": "/icons/icon-192.png",
@@ -40,12 +43,22 @@
     {
       "name": "Register Visitor",
       "url": "/?tab=register",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     },
     {
       "name": "Visitor Directory",
       "url": "/?tab=visitors",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }
