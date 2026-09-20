@@ -66,6 +66,11 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
         </svg>
   ),
+  Blocked: () => (
+    <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 11.293V12.5a2.5 2.5 0 006.88-3.363A3.625 3.625 0 0113 19.375H17m0 0l1.5 1.5m-11.25-5.25v2.25a1.5 1.5 0 013 3h-3M15 11.293v-.667a3 3 0 01-3 0l8.25-1.5.375-.375a1.5 1.5 0 013 0l-7.5 4.5M16 11.293v.667a3 3 0 016 0l8.25 1.5.375.375a1.5 1.5 0 01-3 0l-7.5-4.5" />
+        </svg>
+  ),
   MasterData: () => (
     <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="currentColor">
       <rect x="4.25" y="6.5" width="15.5" height="11" rx="2" />
@@ -597,10 +602,9 @@ function Shell({ user, setUser, logout }) {
       {/* ================= LEFT SIDEBAR ================= */}
       <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
-          <img src="/logo.png" alt="OpsVision VAMS Logo" className="sidebar-logo-img" />
+          <img src="/logo.png" alt="Swagatham Logo" className="sidebar-logo-img" />
           <div className="brand-text">
-            <h1>OpsVision <span>VAMS</span></h1>
-            <p>Access Management</p>
+            <h1>Swagatham</h1>
           </div>
           <button className="mobile-close-btn" onClick={() => setMobileMenuOpen(false)} title="Close Menu">
             <Icons.Close />
@@ -804,6 +808,14 @@ function Dashboard({ user, setTab, viewPass }) {
       accent: '#06b6d4',
       bg: '#ecfeff',
       footer: 'Checked out today'
+    },
+    {
+      title: 'Blocked',
+      val: stats.blocked ?? 0,
+      icon: Icons.Blocked,
+      accent: '#b91c1c',
+      bg: '#fef2f2',
+      footer: 'Blacklisted'
     }
   ];
 
@@ -950,7 +962,7 @@ function Dashboard({ user, setTab, viewPass }) {
                   <div className="step-num">3</div>
                   <div className="step-info">
                     <h4>Exit & Audit Logging</h4>
-                    <p>Checkout timestamped with audit compliance</p>
+                    <p>stamped with audit compliance</p>
                   </div>
                 </div>
               </div>
@@ -1119,7 +1131,7 @@ function Register({ setTab, viewPass }) {
             <input
               required
               className="form-control"
-              placeholder="e.g. John Doe"
+              placeholder="e.g. Ramesh Kumar"
               onChange={e => setField('name', e.target.value)}
             />
           </div>
@@ -1150,7 +1162,7 @@ function Register({ setTab, viewPass }) {
             <input
               type="email"
               className="form-control"
-              placeholder="e.g. john@company.com"
+              placeholder="e.g. spoorthy@company.com"
               onChange={e => setField('email', e.target.value)}
             />
           </div>
@@ -1159,7 +1171,7 @@ function Register({ setTab, viewPass }) {
             <label className="form-label">Company / Organization</label>
             <input
               className="form-control"
-              placeholder="e.g. Acme Corp"
+              placeholder="e.g. Spandana Technologies"
               onChange={e => setField('company', e.target.value)}
             />
           </div>
@@ -1242,7 +1254,7 @@ function Register({ setTab, viewPass }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Expected Check-in Time <span className="req">*</span></label>
+            <label className="form-label">Check-in Time <span className="req">*</span></label>
             <input
               required
               type="datetime-local"
@@ -1253,7 +1265,7 @@ function Register({ setTab, viewPass }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Expected Check-out Time <span className="req">*</span></label>
+            <label className="form-label"> Check-out Time <span className="req">*</span></label>
             <input
               required
               type="datetime-local"
@@ -1267,7 +1279,7 @@ function Register({ setTab, viewPass }) {
             <label className="form-label">Vehicle Registration (Optional)</label>
             <input
               className="form-control"
-              placeholder="e.g. MH-02-AB-1234"
+              placeholder="e.g. KA-02-AB-1234"
               onChange={e => setField('vehicle', e.target.value)}
             />
           </div>
@@ -1285,7 +1297,7 @@ function Register({ setTab, viewPass }) {
 
           <div className="form-group full-width" style={{ marginTop: '10px' }}>
             <button type="submit" className="btn-primary" disabled={loading}>
-              {loading ? 'Registering...' : 'Register Visitor & Generate Access Pass'}
+              {loading ? 'Registering...' : 'Submit'}
             </button>
           </div>
         </form>

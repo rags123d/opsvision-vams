@@ -46,6 +46,8 @@ try { db.exec("ALTER TABLE visits ADD COLUMN expected_checkin TEXT"); } catch(e)
 try { db.exec("ALTER TABLE visits ADD COLUMN expected_checkout TEXT"); } catch(e) {}
 try { db.exec("ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) {}
 try { db.exec("UPDATE users SET active=1 WHERE active IS NULL"); } catch(e) {}
+try { db.exec("ALTER TABLE visitors ADD COLUMN blocked INTEGER DEFAULT 0"); } catch(e) {}
+try { db.exec("UPDATE visitors SET blocked=0 WHERE blocked IS NULL"); } catch(e) {}
 try { db.exec("UPDATE departments SET color='#3b82f6' WHERE color IS NULL"); } catch(e) {}
 try { db.exec("UPDATE purposes SET color='#3b82f6' WHERE color IS NULL"); } catch(e) {}
 
@@ -201,6 +203,7 @@ function dashboard() {
     currentVisitors: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='INSIDE'").get().c,
     rejected: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='REJECTED'").get().c,
     pendingOtp: db.prepare("SELECT COUNT(*) c FROM visitors WHERE otp_verified=0 AND otp IS NOT NULL").get().c,
+    blocked: db.prepare("SELECT COUNT(*) c FROM visitors WHERE blocked=1").get().c,
     pendingApprovals: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='PENDING_APPROVAL'").get().c,
     waiting: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='PENDING_APPROVAL'").get().c,
     approved: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='APPROVED'").get().c,
