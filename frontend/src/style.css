@@ -1148,10 +1148,8 @@ body {
   height: auto;
   max-height: 140px;
   object-fit: contain;
-  border-radius: var(--radius-lg);
-  background: #faf8f5;
-  padding: 8px;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+  background: transparent;
+  padding: 4px;
   transition: var(--transition);
 }
 
@@ -1159,10 +1157,8 @@ body {
   width: 44px;
   height: 44px;
   object-fit: contain;
-  border-radius: var(--radius-md);
-  background: #faf8f5;
-  padding: 2px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  background: transparent;
+  padding: 0;
   flex-shrink: 0;
 }
 
@@ -1170,12 +1166,10 @@ body {
   width: 56px;
   height: 56px;
   object-fit: contain;
-  border-radius: 50%;
-  background: #faf8f5;
-  padding: 4px;
+  background: transparent;
+  padding: 0;
   margin: 0 auto 10px auto;
   display: block;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
 .login-brand p {
@@ -1368,9 +1362,23 @@ body {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);
-  z-index: 1000;
+  z-index: 1100;
   overflow: hidden;
   animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (max-width: 640px) {
+  .notification-dropdown {
+    position: fixed;
+    top: 64px;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: calc(100vw - 24px);
+    max-width: 360px;
+    z-index: 1200;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  }
 }
 
 @keyframes popIn {
@@ -1379,12 +1387,14 @@ body {
 }
 
 .notification-header {
-  padding: 14px 16px;
+  padding: 12px 16px;
   background: var(--bg-card-subtle);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .notification-header h4 {
@@ -1421,12 +1431,19 @@ body {
   font-size: 13px;
   font-weight: 700;
   color: var(--text-main);
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .notification-item .notif-msg {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .notification-item .notif-time {

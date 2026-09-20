@@ -677,35 +677,41 @@ function Shell({ user, setUser, logout }) {
               </button>
 
               {showNotifDropdown && (
-                <div className="notification-dropdown">
-                  <div className="notification-header">
-                    <h4>Notifications ({unreadCount} new)</h4>
-                    {unreadCount > 0 && (
-                      <button className="btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={markAllNotifsRead}>
-                        Mark all read
-                      </button>
-                    )}
-                  </div>
-                  <div className="notification-list">
-                    {notifications.length === 0 ? (
-                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                        No notifications yet.
-                      </div>
-                    ) : (
-                      notifications.map(n => (
-                        <div key={n.id} className={`notification-item ${!n.read ? 'unread' : ''}`} onClick={() => {
-                          if (n.type === 'VISITOR_REGISTERED') setTab('approvals');
-                          else if (n.type === 'VISITOR_ENTRY') setTab('visitors');
-                          setShowNotifDropdown(false);
-                        }}>
-                          <span className="notif-title">{n.title}</span>
-                          <span className="notif-msg">{n.message}</span>
-                          <span className="notif-time">{new Date(n.created_at).toLocaleTimeString()}</span>
+                <>
+                  <div
+                    style={{ position: 'fixed', inset: 0, zIndex: 1050, background: 'transparent' }}
+                    onClick={() => setShowNotifDropdown(false)}
+                  />
+                  <div className="notification-dropdown">
+                    <div className="notification-header">
+                      <h4>Notifications ({unreadCount} new)</h4>
+                      {unreadCount > 0 && (
+                        <button className="btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={markAllNotifsRead}>
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
+                    <div className="notification-list">
+                      {notifications.length === 0 ? (
+                        <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                          No notifications yet.
                         </div>
-                      ))
-                    )}
+                      ) : (
+                        notifications.map(n => (
+                          <div key={n.id} className={`notification-item ${!n.read ? 'unread' : ''}`} onClick={() => {
+                            if (n.type === 'VISITOR_REGISTERED') setTab('approvals');
+                            else if (n.type === 'VISITOR_ENTRY') setTab('visitors');
+                            setShowNotifDropdown(false);
+                          }}>
+                            <span className="notif-title">{n.title}</span>
+                            <span className="notif-msg">{n.message}</span>
+                            <span className="notif-time">{new Date(n.created_at).toLocaleTimeString()}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
-                </div>
+                </>
               )}
             </div>
 
