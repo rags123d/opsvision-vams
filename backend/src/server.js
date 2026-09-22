@@ -116,13 +116,19 @@ function createNotification({ user_id = null, type, title, message, link_id = nu
   }
 }
 
-const count = db.prepare('SELECT COUNT(*) c FROM users').get().c;
-if (!count) {
-  const add = db.prepare('INSERT INTO users(username,password,name,role,department,email) VALUES(?,?,?,?,?,?)');
-  add.run('admin', bcrypt.hashSync('admin123', 10), 'System Administrator', 'ADMIN', 'Administration', 'admin@opsvision.com');
-  add.run('guard', bcrypt.hashSync('guard123', 10), 'Security Guard', 'GUARD', 'Security', 'guard@opsvision.com');
-  add.run('reception', bcrypt.hashSync('reception123', 10), 'Reception Desk', 'RECEPTION', 'Reception', 'reception@opsvision.com');
-  add.run('employee', bcrypt.hashSync('employee123', 10), 'Demo Host', 'EMPLOYEE', 'Operations', 'host.demo@opsvision.com');
+// Seed default matrix role accounts if not present
+const seedUsers = [
+  ['superadmin', 'admin123', 'System Super Admin / Dev', 'SUPER_ADMIN', 'Information Technology', 'superadmin@opsvision.com'],
+  ['admin', 'admin123', 'System Administrator', 'ADMIN', 'Administration', 'admin@opsvision.com'],
+  ['ceo', 'ceo123', 'CEO / Executive View', 'EXECUTIVE', 'Executive', 'ceo@opsvision.com'],
+  ['reception', 'reception123', 'Sanjiv (Front Desk)', 'RECEPTION', 'Reception', 'reception@opsvision.com'],
+  ['guard', 'guard123', 'Security Guard', 'GUARD', 'Security', 'guard@opsvision.com'],
+  ['employee', 'employee123', 'Demo Host', 'EMPLOYEE', 'Operations', 'host.demo@opsvision.com']
+];
+
+const seedStmt = db.prepare('INSERT OR IGNORE INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,1)');
+for (const u of seedUsers) {
+  seedStmt.run(u[0], bcrypt.hashSync(u[1], 10), u[2], u[3], u[4], u[5]);
 }
 
 // Seed default "Person to Meet (Host)" master data if not present
@@ -213,15 +219,71 @@ function dashboard() {
 
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'OpsVision VAMS' }));
 
+app.post('/api/auth/register', (req, res) => {
+  const { name, email, password, department } = req.body;
+  if (!name || !email || !password) {
+    return res.status(400).json({ message: 'Name, email, and password are required' });
+  }
+  const cleanEmail = String(email).trim().toLowerCase();
+  if (!cleanEmail.includes('@')) {
+    return res.status(400).json({ message: 'Valid email address is required' });
+  }
+  if (String(password).length < 4) {
+    return res.status(400).json({ message: 'Password must be at least 4 characters long' });
+  }
+
+  const existing = db.prepare('SELECT * FROM users WHERE LOWER(email)=? OR LOWER(username)=?').get(cleanEmail, cleanEmail);
+  let userId;
+  const hashedPassword = bcrypt.hashSync(password, 10);
+
+  if (existing) {
+    const assignedRole = (existing.role === 'ADMIN' || existing.role === 'GUARD' || existing.role === 'RECEPTION') ? existing.role : 'HOST';
+    db.prepare('UPDATE users SET password=?, name=?, role=?, department=?, email=?, active=1 WHERE id=?').run(
+      hashedPassword,
+      name.trim(),
+      assignedRole,
+      department ? department.trim() : (existing.department || null),
+      cleanEmail,
+      existing.id
+    );
+    userId = existing.id;
+  } else {
+    const r = db.prepare('INSERT INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,1)').run(
+      cleanEmail,
+      hashedPassword,
+      name.trim(),
+      'HOST',
+      department ? department.trim() : null,
+      cleanEmail
+    );
+    userId = r.lastInsertRowid;
+  }
+
+  const u = db.prepare('SELECT id,username,name,role,department,email FROM users WHERE id=?').get(userId);
+  const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email }, secret, { expiresIn: '8h' });
+  audit(u.id, 'REGISTER', 'USER', u.id, `Host user registered: ${u.email}`);
+
+  res.status(201).json({ token, user: u, message: 'Host profile registered successfully' });
+});
+
 app.post('/api/auth/login', (req, res) => {
-  const u = db.prepare('SELECT * FROM users WHERE username=?').get(req.body.username);
+  const rawUser = String(req.body.username || '').trim();
+  const cleanUser = rawUser.toLowerCase();
+  const u = db.prepare('SELECT * FROM users WHERE username=? OR LOWER(username)=? OR LOWER(email)=?').get(rawUser, cleanUser, cleanUser);
   if (!u || !bcrypt.compareSync(req.body.password, u.password)) return res.status(401).json({ message: 'Invalid credentials' });
+  if (u.active === 0) return res.status(403).json({ message: 'Account is deactivated' });
   const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email }, secret, { expiresIn: '8h' });
   res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email } });
 });
 
 // Notifications API
 app.get('/api/notifications', auth, (req, res) => {
+  const isHost = req.user.role === 'HOST' || req.user.role === 'EMPLOYEE';
+  if (isHost) {
+    const rows = db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 50').all(req.user.id);
+    const unreadCount = db.prepare('SELECT COUNT(*) c FROM notifications WHERE user_id=? AND read=0').get(req.user.id).c;
+    return res.json({ notifications: rows, unreadCount });
+  }
   const rows = db.prepare('SELECT * FROM notifications WHERE user_id IS NULL OR user_id=? ORDER BY id DESC LIMIT 50').all(req.user.id);
   const unreadCount = db.prepare('SELECT COUNT(*) c FROM notifications WHERE (user_id IS NULL OR user_id=?) AND read=0').get(req.user.id).c;
   res.json({ notifications: rows, unreadCount });
@@ -233,18 +295,23 @@ app.put('/api/notifications/:id/read', auth, (req, res) => {
 });
 
 app.put('/api/notifications/read-all', auth, (req, res) => {
-  db.prepare('UPDATE notifications SET read=1 WHERE user_id IS NULL OR user_id=?').run(req.user.id);
+  const isHost = req.user.role === 'HOST' || req.user.role === 'EMPLOYEE';
+  if (isHost) {
+    db.prepare('UPDATE notifications SET read=1 WHERE user_id=?').run(req.user.id);
+  } else {
+    db.prepare('UPDATE notifications SET read=1 WHERE user_id IS NULL OR user_id=?').run(req.user.id);
+  }
   res.json({ message: 'All notifications marked as read' });
 });
 
 // SMTP Admin Settings Endpoints
-app.get('/api/admin/smtp-settings', auth, roles('ADMIN'), (req, res) => {
+app.get('/api/admin/smtp-settings', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const config = getSmtpConfig();
   // Hide password in response for security
   res.json({ ...config, pass: config.pass ? '********' : '' });
 });
 
-app.post('/api/admin/smtp-settings', auth, roles('ADMIN'), (req, res) => {
+app.post('/api/admin/smtp-settings', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const { host, port, secure, user, pass, from } = req.body;
   if (host !== undefined) setSetting('smtp_host', host);
   if (port !== undefined) setSetting('smtp_port', port);
@@ -256,7 +323,7 @@ app.post('/api/admin/smtp-settings', auth, roles('ADMIN'), (req, res) => {
   res.json({ message: 'SMTP settings saved successfully' });
 });
 
-app.post('/api/admin/test-email', auth, roles('ADMIN'), async (req, res) => {
+app.post('/api/admin/test-email', auth, roles('SUPER_ADMIN', 'ADMIN'), async (req, res) => {
   const targetEmail = req.body.email || req.user.email;
   if (!targetEmail) return res.status(400).json({ message: 'Target email is required' });
   const result = await sendEmail({
@@ -275,14 +342,78 @@ app.post('/api/admin/test-email', auth, roles('ADMIN'), async (req, res) => {
   }
 });
 
-app.get('/api/users', auth, roles('ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email FROM users ORDER BY name').all()));
-app.get('/api/hosts', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email FROM users WHERE active=1 ORDER BY name').all()));
+// User Management Endpoints (Super Admin & Admin)
+app.get('/api/users', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
+  res.json(db.prepare('SELECT id,name,username,role,department,email,active FROM users ORDER BY name').all());
+});
+
+app.post('/api/users', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
+  const { username, password, name, role, department, email } = req.body;
+  if (!username || !password || !name || !role) {
+    return res.status(400).json({ message: 'Username, password, name, and role are required' });
+  }
+  if (role === 'SUPER_ADMIN' && req.user.role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ message: 'Only Super Admin can assign the SUPER_ADMIN role' });
+  }
+  const cleanUser = String(username).trim().toLowerCase();
+  const existing = db.prepare('SELECT id FROM users WHERE LOWER(username)=? OR (email IS NOT NULL AND LOWER(email)=?)').get(cleanUser, (email || '').trim().toLowerCase());
+  if (existing) return res.status(400).json({ message: 'Username or email already registered' });
+
+  const r = db.prepare('INSERT INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,1)').run(
+    cleanUser,
+    bcrypt.hashSync(password, 10),
+    name.trim(),
+    role,
+    department ? department.trim() : null,
+    email ? email.trim() : null
+  );
+  audit(req.user.id, 'CREATE', 'USER', r.lastInsertRowid, `${name} (${role})`);
+  res.status(201).json({ message: 'User account created successfully' });
+});
+
+app.put('/api/users/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id);
+  if (!target) return res.status(404).json({ message: 'User not found' });
+  const { name, role, department, email, active, password } = req.body;
+  if (target.role === 'SUPER_ADMIN' && req.user.role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ message: 'Only Super Admin can edit a Super Admin account' });
+  }
+  if (role === 'SUPER_ADMIN' && req.user.role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ message: 'Only Super Admin can assign the SUPER_ADMIN role' });
+  }
+
+  const newPass = password && String(password).trim() ? bcrypt.hashSync(String(password).trim(), 10) : target.password;
+  db.prepare('UPDATE users SET name=?, role=?, department=?, email=?, active=?, password=? WHERE id=?').run(
+    name !== undefined ? name.trim() : target.name,
+    role || target.role,
+    department !== undefined ? (department ? department.trim() : null) : target.department,
+    email !== undefined ? (email ? email.trim() : null) : target.email,
+    active !== undefined ? (active ? 1 : 0) : target.active,
+    newPass,
+    target.id
+  );
+  audit(req.user.id, 'UPDATE', 'USER', target.id, `Updated ${target.username}`);
+  res.json({ message: 'User updated successfully' });
+});
+
+app.delete('/api/users/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id);
+  if (!target) return res.status(404).json({ message: 'User not found' });
+  if (target.role === 'SUPER_ADMIN' && req.user.role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ message: 'Only Super Admin can deactivate a Super Admin account' });
+  }
+  db.prepare('UPDATE users SET active=0 WHERE id=?').run(target.id);
+  audit(req.user.id, 'DELETE', 'USER', target.id, `Deactivated ${target.username}`);
+  res.json({ message: 'User deactivated successfully' });
+});
+
+app.get('/api/hosts', auth, roles('SUPER_ADMIN', 'ADMIN', 'EXECUTIVE', 'RECEPTION', 'GUARD'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email FROM users WHERE active=1 ORDER BY name').all()));
 app.get('/api/master/departments', auth, (req, res) => res.json(db.prepare('SELECT id,name,code,description,color FROM departments WHERE active=1 ORDER BY name').all()));
 app.get('/api/master/purposes', auth, (req, res) => res.json(db.prepare('SELECT id,name,description,color FROM purposes WHERE active=1 ORDER BY name').all()));
-app.get('/api/master/departments/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,code,description,color,active FROM departments ORDER BY name').all()));
-app.get('/api/master/purposes/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,description,color,active FROM purposes ORDER BY name').all()));
+app.get('/api/master/departments/all', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,code,description,color,active FROM departments ORDER BY name').all()));
+app.get('/api/master/purposes/all', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,description,color,active FROM purposes ORDER BY name').all()));
 
-app.post('/api/master/departments', auth, roles('ADMIN'), (req, res) => {
+app.post('/api/master/departments', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const { name, code, desc, color } = req.body;
   if (!name) return res.status(400).json({ message: 'Name is required' });
   const r = db.prepare('INSERT INTO departments(name,code,description,active,color) VALUES(?,?,?,1,?)').run(name, code || null, desc || null, color || '#3b82f6');
@@ -290,7 +421,7 @@ app.post('/api/master/departments', auth, roles('ADMIN'), (req, res) => {
   res.status(201).json({ message: 'Department added' });
 });
 
-app.post('/api/master/purposes', auth, roles('ADMIN'), (req, res) => {
+app.post('/api/master/purposes', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const { name, desc, color } = req.body;
   if (!name) return res.status(400).json({ message: 'Name is required' });
   const r = db.prepare('INSERT INTO purposes(name,description,active,color) VALUES(?,?,1,?)').run(name, desc || null, color || '#3b82f6');
@@ -298,7 +429,7 @@ app.post('/api/master/purposes', auth, roles('ADMIN'), (req, res) => {
   res.status(201).json({ message: 'Purpose added' });
 });
 
-app.put('/api/master/departments/:id', auth, roles('ADMIN'), (req, res) => {
+app.put('/api/master/departments/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const d = db.prepare('SELECT id,color FROM departments WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ message: 'Department not found' });
   const color = req.body.color || d.color || '#3b82f6';
@@ -307,7 +438,7 @@ app.put('/api/master/departments/:id', auth, roles('ADMIN'), (req, res) => {
   res.json({ message: 'Department updated' });
 });
 
-app.put('/api/master/purposes/:id', auth, roles('ADMIN'), (req, res) => {
+app.put('/api/master/purposes/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const d = db.prepare('SELECT id,color FROM purposes WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ message: 'Purpose not found' });
   const color = req.body.color || d.color || '#3b82f6';
@@ -316,22 +447,22 @@ app.put('/api/master/purposes/:id', auth, roles('ADMIN'), (req, res) => {
   res.json({ message: 'Purpose updated' });
 });
 
-app.delete('/api/master/departments/:id', auth, roles('ADMIN'), (req, res) => {
+app.delete('/api/master/departments/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   db.prepare('UPDATE departments SET active=0 WHERE id=?').run(req.params.id);
   audit(req.user.id, 'DELETE', 'DEPARTMENT', req.params.id);
   res.json({ message: 'Department removed' });
 });
 
-app.delete('/api/master/purposes/:id', auth, roles('ADMIN'), (req, res) => {
+app.delete('/api/master/purposes/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   db.prepare('UPDATE purposes SET active=0 WHERE id=?').run(req.params.id);
   audit(req.user.id, 'DELETE', 'PURPOSE', req.params.id);
   res.json({ message: 'Purpose removed' });
 });
 
-app.get('/api/master/hosts', auth, (req, res) => res.json(db.prepare("SELECT id,name,department,email,active FROM users WHERE role='HOST' AND active=1 ORDER BY name").all()));
-app.get('/api/master/hosts/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare("SELECT id,name,username,department,email,active FROM users WHERE role='HOST' ORDER BY name").all()));
+app.get('/api/master/hosts', auth, roles('SUPER_ADMIN', 'ADMIN', 'EXECUTIVE', 'RECEPTION', 'GUARD'), (req, res) => res.json(db.prepare("SELECT id,name,department,email,active FROM users WHERE role='HOST' AND active=1 ORDER BY name").all()));
+app.get('/api/master/hosts/all', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => res.json(db.prepare("SELECT id,name,username,department,email,active FROM users WHERE role='HOST' ORDER BY name").all()));
 
-app.post('/api/master/hosts', auth, roles('ADMIN'), (req, res) => {
+app.post('/api/master/hosts', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const { name, department, email, active } = req.body;
   if (!name) return res.status(400).json({ message: 'Name is required' });
   const r = db.prepare('INSERT INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,?)').run('host' + Date.now(), bcrypt.hashSync('host123', 10), name, 'HOST', department || null, email || null, active !== false ? 1 : 0);
@@ -339,7 +470,7 @@ app.post('/api/master/hosts', auth, roles('ADMIN'), (req, res) => {
   res.status(201).json({ message: 'Host added' });
 });
 
-app.put('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
+app.put('/api/master/hosts/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   const d = db.prepare("SELECT id FROM users WHERE id=? AND role='HOST'").get(req.params.id);
   if (!d) return res.status(404).json({ message: 'Host not found' });
   db.prepare('UPDATE users SET name=?,department=?,email=?,active=? WHERE id=?').run(req.body.name, req.body.department || null, req.body.email || null, req.body.active !== undefined ? (req.body.active ? 1 : 0) : 1, req.params.id);
@@ -347,17 +478,42 @@ app.put('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
   res.json({ message: 'Host updated' });
 });
 
-app.delete('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
+app.delete('/api/master/hosts/:id', auth, roles('SUPER_ADMIN', 'ADMIN'), (req, res) => {
   db.prepare("UPDATE users SET active=0 WHERE id=? AND role='HOST'").run(req.params.id);
   audit(req.user.id, 'DELETE', 'HOST', req.params.id);
   res.json({ message: 'Host removed' });
 });
 
-app.get('/api/dashboard', auth, (req, res) => res.json(dashboard()));
+app.get('/api/dashboard', auth, (req, res) => {
+  const isHost = req.user.role === 'HOST' || req.user.role === 'EMPLOYEE';
+  if (isHost) {
+    const today = new Date().toISOString().slice(0, 10);
+    const hostId = Number(req.user.id);
+    return res.json({
+      visitorsToday: db.prepare("SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE v.host_id=? AND substr(x.created_at,1,10)=?").get(hostId, today).c,
+      currentVisitors: db.prepare("SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE v.host_id=? AND x.status='INSIDE'").get(hostId).c,
+      rejected: db.prepare("SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE v.host_id=? AND x.status='REJECTED'").get(hostId).c,
+      pendingOtp: db.prepare("SELECT COUNT(*) c FROM visitors WHERE host_id=? AND otp_verified=0 AND otp IS NOT NULL").get(hostId).c,
+      blocked: db.prepare("SELECT COUNT(*) c FROM visitors WHERE host_id=? AND blocked=1").get(hostId).c,
+      pendingApprovals: db.prepare("SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE v.host_id=? AND x.status='PENDING_APPROVAL'").get(hostId).c,
+      waiting: db.prepare("SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE v.host_id=? AND x.status='PENDING_APPROVAL'").get(hostId).c,
+      approved: db.prepare("SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE v.host_id=? AND x.status='APPROVED'").get(hostId).c,
+      exitedToday: db.prepare("SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE v.host_id=? AND x.status='CLOSED' AND substr(x.exit_time,1,10)=?").get(hostId, today).c
+    });
+  }
+  res.json(dashboard());
+});
 
 app.get('/api/visitors', auth, (req, res) => {
   let sql = `SELECT v.*,x.id visit_id,x.visitor_code,x.entry_time,x.exit_time,x.status,x.valid_until,x.expected_checkin,x.expected_checkout,u.name host_name,u.email host_email FROM visitors v JOIN visits x ON x.visitor_id=v.id LEFT JOIN users u ON u.id=v.host_id WHERE 1=1`;
   const p = [];
+
+  const isHost = req.user.role === 'HOST' || req.user.role === 'EMPLOYEE';
+  if (isHost) {
+    sql += ' AND v.host_id=?';
+    p.push(req.user.id);
+  }
+
   for (const k of ['name', 'mobile', 'company', 'department']) if (req.query[k]) {
     sql += ` AND v.${k} LIKE ?`;
     p.push('%' + req.query[k] + '%');
@@ -441,7 +597,7 @@ app.post('/api/visitors/register', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), a
   res.status(201).json({ message: 'Visitor registered. OTP generated.', ...out, otpDemo: true });
 });
 
-app.post('/api/visitors/:id/verify-otp', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.post('/api/visitors/:id/verify-otp', auth, roles('SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD'), (req, res) => {
   const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
   if (!v) return res.status(404).json({ message: 'Visitor not found' });
   if (req.body.otp !== v.otp && req.body.otp !== '123456') return res.status(400).json({ message: 'Invalid OTP' });
@@ -450,13 +606,13 @@ app.post('/api/visitors/:id/verify-otp', auth, roles('GUARD', 'RECEPTION', 'ADMI
   res.json({ message: 'OTP verified' });
 });
 
-app.post('/api/visitors/:id/photo', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.post('/api/visitors/:id/photo', auth, roles('SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD'), (req, res) => {
   db.prepare('UPDATE visitors SET photo=? WHERE id=?').run(req.body.photo || '', req.params.id);
   audit(req.user.id, 'CAPTURE_PHOTO', 'VISITOR', req.params.id);
   res.json({ message: 'Photo saved' });
 });
 
-app.put('/api/visitors/:id', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.put('/api/visitors/:id', auth, roles('SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD'), (req, res) => {
   const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
   if (!v) return res.status(404).json({ message: 'Visitor not found' });
   const { name, mobile, email, company, purpose, host_id, department, vehicle, expected_checkin, expected_checkout } = req.body;
@@ -474,7 +630,7 @@ app.put('/api/visitors/:id', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, r
   res.json({ message: 'Visitor updated' });
 });
 
-app.delete('/api/visitors/:id', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.delete('/api/visitors/:id', auth, roles('SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD'), (req, res) => {
   const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
   if (!v) return res.status(404).json({ message: 'Visitor not found' });
   const tx = db.transaction(() => {
@@ -492,23 +648,32 @@ app.delete('/api/visitors/:id', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req
   res.json({ message: 'Visitor deleted' });
 });
 
-app.get('/api/approvals', auth, roles('EMPLOYEE', 'RECEPTION', 'ADMIN'), (req, res) => {
-  const mine = req.user.role === 'EMPLOYEE' ? ' AND a.host_id=' + Number(req.user.id) : '';
-  res.json(db.prepare(`SELECT a.*,x.visitor_code,x.status visit_status,v.name visitor_name,v.company,v.purpose,v.mobile,u.name host_name FROM approvals a JOIN visits x ON x.id=a.visit_id JOIN visitors v ON v.id=x.visitor_id JOIN users u ON u.id=a.host_id WHERE 1=1 ${mine} ORDER BY a.id DESC`).all());
+app.get('/api/approvals', auth, roles('SUPER_ADMIN', 'ADMIN', 'EXECUTIVE', 'RECEPTION', 'HOST', 'EMPLOYEE'), (req, res) => {
+  const isHost = req.user.role === 'HOST' || req.user.role === 'EMPLOYEE';
+  if (isHost) {
+    const rows = db.prepare(`SELECT a.*,x.visitor_code,x.status visit_status,v.name visitor_name,v.company,v.purpose,v.mobile,u.name host_name FROM approvals a JOIN visits x ON x.id=a.visit_id JOIN visitors v ON v.id=x.visitor_id JOIN users u ON u.id=a.host_id WHERE (a.host_id=? OR v.host_id=?) ORDER BY a.id DESC`).all(req.user.id, req.user.id);
+    return res.json(rows);
+  }
+  res.json(db.prepare(`SELECT a.*,x.visitor_code,x.status visit_status,v.name visitor_name,v.company,v.purpose,v.mobile,u.name host_name FROM approvals a JOIN visits x ON x.id=a.visit_id JOIN visitors v ON v.id=x.visitor_id JOIN users u ON u.id=a.host_id ORDER BY a.id DESC`).all());
 });
 
-app.post('/api/approvals/:visitId', auth, roles('EMPLOYEE', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.post('/api/approvals/:visitId', auth, roles('SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'HOST', 'EMPLOYEE'), (req, res) => {
   const visit = db.prepare('SELECT * FROM visits WHERE id=?').get(req.params.visitId);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
   const approval = db.prepare('SELECT * FROM approvals WHERE visit_id=?').get(visit.id);
-  if (req.user.role === 'EMPLOYEE' && approval.host_id !== req.user.id) return res.status(403).json({ message: 'Not your approval' });
+  const visitor = db.prepare('SELECT * FROM visitors WHERE id=?').get(visit.visitor_id);
+  const hostId = approval ? approval.host_id : (visitor ? visitor.host_id : null);
+  if (req.user.role !== 'SUPER_ADMIN' && Number(hostId) !== Number(req.user.id)) {
+    return res.status(403).json({ message: 'Only the related host can approve or decline this visit' });
+  }
   const status = req.body.action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-  db.prepare('UPDATE approvals SET status=?,action_time=CURRENT_TIMESTAMP,notes=? WHERE visit_id=?').run(status, req.body.notes || '', visit.id);
+  if (approval) {
+    db.prepare('UPDATE approvals SET status=?,action_time=CURRENT_TIMESTAMP,notes=? WHERE visit_id=?').run(status, req.body.notes || '', visit.id);
+  }
   db.prepare('UPDATE visits SET status=? WHERE id=?').run(status, visit.id);
   audit(req.user.id, status, 'VISIT', visit.id);
 
   // App notification for Approval
-  const visitor = db.prepare('SELECT * FROM visitors WHERE id=?').get(visit.visitor_id);
   if (visitor) {
     createNotification({
       user_id: null, // Broadcast to Security & Reception
@@ -523,7 +688,7 @@ app.post('/api/approvals/:visitId', auth, roles('EMPLOYEE', 'RECEPTION', 'ADMIN'
 });
 
 // Visitor Entry Endpoint (Trigger for Email Acknowledgement to Visitor & Host)
-app.post('/api/visits/:id/entry', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), async (req, res) => {
+app.post('/api/visits/:id/entry', auth, roles('SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD'), async (req, res) => {
   const visit = db.prepare('SELECT x.*, v.name visitor_name, v.email visitor_email, v.company visitor_company, v.purpose visitor_purpose, v.mobile visitor_mobile, v.host_id, u.name host_name, u.email host_email, u.department host_department FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?').get(req.params.id);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
   if (visit.status !== 'APPROVED') return res.status(400).json({ message: 'Visit is not approved' });
@@ -614,7 +779,7 @@ app.post('/api/visits/:id/entry', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), as
   res.json({ message: 'Entry recorded. Notifications & email acknowledgements dispatched.' });
 });
 
-app.post('/api/visits/:id/exit', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.post('/api/visits/:id/exit', auth, roles('SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD'), (req, res) => {
   const v = db.prepare('SELECT * FROM visits WHERE id=?').get(req.params.id);
   if (!v) return res.status(404).json({ message: 'Visit not found' });
   if (v.status !== 'INSIDE') return res.status(400).json({ message: 'Visitor is not inside' });
@@ -623,16 +788,20 @@ app.post('/api/visits/:id/exit', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (re
   res.json({ message: 'Exit recorded' });
 });
 
-app.get('/api/reports/visitors', auth, roles('ADMIN', 'RECEPTION'), (req, res) => {
+app.get('/api/reports/visitors', auth, roles('SUPER_ADMIN', 'ADMIN', 'EXECUTIVE', 'RECEPTION'), (req, res) => {
   const rows = db.prepare(`SELECT x.visitor_code,v.name,v.mobile,v.company,v.purpose,v.department,u.name host_name,x.entry_time,x.exit_time,x.status FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id ORDER BY x.id DESC`).all();
   res.json(rows);
 });
 
-app.get('/api/audit', auth, roles('ADMIN'), (req, res) => res.json(db.prepare(`SELECT a.*,u.name actor_name FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 500`).all()));
+app.get('/api/audit', auth, roles('SUPER_ADMIN', 'ADMIN', 'EXECUTIVE'), (req, res) => res.json(db.prepare(`SELECT a.*,u.name actor_name FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 500`).all()));
 
 app.get('/api/visits/:id/pass', auth, async (req, res) => {
-  const r = db.prepare(`SELECT x.*,v.name,v.company,v.purpose,v.department,v.photo,u.name host_name FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?`).get(req.params.id);
+  const r = db.prepare(`SELECT x.*,v.name,v.company,v.purpose,v.department,v.photo,v.host_id,u.name host_name FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?`).get(req.params.id);
   if (!r) return res.status(404).json({ message: 'Not found' });
+  const isHost = req.user.role === 'HOST' || req.user.role === 'EMPLOYEE';
+  if (isHost && Number(r.host_id) !== Number(req.user.id)) {
+    return res.status(403).json({ message: 'Forbidden' });
+  }
   const qr = await QRCode.toDataURL(r.visitor_code);
   res.json({ ...r, qr });
 });

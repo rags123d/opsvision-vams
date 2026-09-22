@@ -101,6 +101,11 @@ const Icons = {
     <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
+  ),
+  Users: () => (
+    <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+    </svg>
   )
 };
 
@@ -189,10 +194,19 @@ function PassModal({ passData, onClose }) {
   );
 }
 
-// Login Screen
+// Login Screen with Host Registration
 function Login({ onLogin }) {
+  const [mode, setMode] = useState('login'); // 'login' | 'register'
   const [u, setU] = useState('admin');
   const [p, setP] = useState('admin123');
+  
+  // Registration state
+  const [regName, setRegName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regPass, setRegPass] = useState('');
+  const [regConfirm, setRegConfirm] = useState('');
+  const [regDept, setRegDept] = useState('');
+  
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -214,6 +228,47 @@ function Login({ onLogin }) {
     }
   };
 
+  const doRegister = async (e) => {
+    e.preventDefault();
+    if (!regName || !regEmail || !regPass) {
+      setErr('Full name, email address, and password are required');
+      return;
+    }
+    if (!regEmail.includes('@')) {
+      setErr('Please enter a valid email address');
+      return;
+    }
+    if (regPass.length < 4) {
+      setErr('Password must be at least 4 characters');
+      return;
+    }
+    if (regPass !== regConfirm) {
+      setErr('Passwords do not match');
+      return;
+    }
+
+    setLoading(true);
+    setErr('');
+    try {
+      const d = await api('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: regName,
+          email: regEmail,
+          password: regPass,
+          department: regDept
+        })
+      });
+      localStorage.setItem('token', d.token);
+      localStorage.setItem('user', JSON.stringify(d.user));
+      onLogin(d.user);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="login-screen">
       <div className="login-card">
@@ -224,57 +279,156 @@ function Login({ onLogin }) {
           <p>Enterprise Visitor Access Management System</p>
         </div>
 
+        {/* Tab Switcher for Sign In vs Host Registration */}
+        <div style={{ display: 'flex', gap: '6px', background: 'var(--bg-card-subtle)', padding: '4px', borderRadius: '10px', marginBottom: '16px' }}>
+          <button
+            type="button"
+            className={`btn-secondary ${mode === 'login' ? 'btn-primary' : ''}`}
+            style={{ flex: 1, padding: '8px', fontSize: '13px', fontWeight: '700' }}
+            onClick={() => { setMode('login'); setErr(''); }}
+          >
+            Sign In
+          </button>
+          <button
+            type="button"
+            className={`btn-secondary ${mode === 'register' ? 'btn-primary' : ''}`}
+            style={{ flex: 1, padding: '8px', fontSize: '13px', fontWeight: '700' }}
+            onClick={() => { setMode('register'); setErr(''); }}
+          >
+            Register Host Profile
+          </button>
+        </div>
+
         {err && <div className="alert-box alert-error">{err}</div>}
 
-        <div className="form-group">
-          <label className="form-label">Username</label>
-          <input
-            className="form-control"
-            placeholder="Enter username"
-            value={u}
-            onChange={e => setU(e.target.value)}
-          />
-        </div>
+        {mode === 'login' ? (
+          <div>
+            <div className="form-group">
+              <label className="form-label">Username or Email ID</label>
+              <input
+                className="form-control"
+                placeholder="Enter username or email"
+                value={u}
+                onChange={e => setU(e.target.value)}
+              />
+            </div>
 
-        <div className="form-group">
-          <label className="form-label">Password</label>
-          <input
-            className="form-control"
-            type="password"
-            placeholder="Enter password"
-            value={p}
-            onChange={e => setP(e.target.value)}
-          />
-        </div>
+            <div className="form-group">
+              <label className="form-label">Password</label>
+              <input
+                className="form-control"
+                type="password"
+                placeholder="Enter password"
+                value={p}
+                onChange={e => setP(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && doLogin(u, p)}
+              />
+            </div>
 
-        <button
-          className="btn-primary"
-          style={{ width: '100%' }}
-          disabled={loading}
-          onClick={() => doLogin(u, p)}
-        >
-          {loading ? 'Authenticating...' : 'Sign In'}
-        </button>
+            <button
+              className="btn-primary"
+              style={{ width: '100%', marginBottom: '16px' }}
+              disabled={loading}
+              onClick={() => doLogin(u, p)}
+            >
+              {loading ? 'Authenticating...' : 'Sign In'}
+            </button>
 
-        <div>
-          <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--text-muted)' }}>
-            DEMO ONE-CLICK ROLES:
-          </span>
-          <div className="quick-login-pills">
-            <button className="quick-login-btn" onClick={() => { setU('admin'); setP('admin123'); doLogin('admin', 'admin123'); }}>
-              🛡️ Admin
-            </button>
-            <button className="quick-login-btn" onClick={() => { setU('guard'); setP('guard123'); doLogin('guard', 'guard123'); }}>
-              🚪 Guard
-            </button>
-            <button className="quick-login-btn" onClick={() => { setU('reception'); setP('reception123'); doLogin('reception', 'reception123'); }}>
-              🏢 Reception
-            </button>
-            <button className="quick-login-btn" onClick={() => { setU('employee'); setP('employee123'); doLogin('employee', 'employee123'); }}>
-              👤 Host
-            </button>
+            <div>
+              <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--text-muted)' }}>
+                DEMO ONE-CLICK ROLES:
+              </span>
+              <div className="quick-login-pills">
+                <button className="quick-login-btn" onClick={() => { setU('superadmin'); setP('admin123'); doLogin('superadmin', 'admin123'); }}>
+                  👑 Super Admin
+                </button>
+                <button className="quick-login-btn" onClick={() => { setU('admin'); setP('admin123'); doLogin('admin', 'admin123'); }}>
+                  🛡️ Admin
+                </button>
+                <button className="quick-login-btn" onClick={() => { setU('ceo'); setP('ceo123'); doLogin('ceo', 'ceo123'); }}>
+                  💼 Executive (CEO)
+                </button>
+                <button className="quick-login-btn" onClick={() => { setU('reception'); setP('reception123'); doLogin('reception', 'reception123'); }}>
+                  🏢 Reception (Sanjiv)
+                </button>
+                <button className="quick-login-btn" onClick={() => { setU('guard'); setP('guard123'); doLogin('guard', 'guard123'); }}>
+                  🚪 Guard
+                </button>
+                <button className="quick-login-btn" onClick={() => { setU('host_ravi'); setP('host123'); doLogin('host_ravi', 'host123'); }}>
+                  👤 Standard Host
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <form onSubmit={doRegister}>
+            <div className="form-group">
+              <label className="form-label">Full Name <span className="req">*</span></label>
+              <input
+                required
+                className="form-control"
+                placeholder="e.g. Dr. Ananya Sharma"
+                value={regName}
+                onChange={e => setRegName(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Work Email ID <span className="req">*</span></label>
+              <input
+                required
+                type="email"
+                className="form-control"
+                placeholder="ananya.sharma@opsvision.com"
+                value={regEmail}
+                onChange={e => setRegEmail(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Department / Unit</label>
+              <input
+                className="form-control"
+                placeholder="e.g. Information Technology"
+                value={regDept}
+                onChange={e => setRegDept(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Custom Password <span className="req">*</span></label>
+              <input
+                required
+                type="password"
+                className="form-control"
+                placeholder="Create password"
+                value={regPass}
+                onChange={e => setRegPass(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Confirm Password <span className="req">*</span></label>
+              <input
+                required
+                type="password"
+                className="form-control"
+                placeholder="Confirm password"
+                value={regConfirm}
+                onChange={e => setRegConfirm(e.target.value)}
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="btn-primary"
+              style={{ width: '100%' }}
+              disabled={loading}
+            >
+              {loading ? 'Creating Host Profile...' : 'Register Host Profile & Sign In'}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -570,17 +724,25 @@ function Shell({ user, setUser, logout }) {
     }
   };
 
-  const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard },
-    { id: 'register', label: 'Visitor Registration', icon: Icons.Register, roles: ['ADMIN', 'GUARD', 'RECEPTION'] },
-    { id: 'visitors', label: 'Visitor Directory', icon: Icons.Visitors },
-    { id: 'approvals', label: 'Host Approvals', icon: Icons.Approvals, badge: pendingCount > 0 ? pendingCount : null, roles: ['ADMIN', 'RECEPTION', 'EMPLOYEE'] },
-    { id: 'reports', label: 'Reports & Analytics', icon: Icons.Reports, roles: ['ADMIN', 'RECEPTION'] },
-    { id: 'audit', label: 'Digital Audit Trail', icon: Icons.Audit, roles: ['ADMIN'] },
-    { id: 'masterdata', label: 'Master Data', icon: Icons.MasterData, roles: ['ADMIN'] }
-  ].filter(item => !item.roles || item.roles.includes(user.role));
+  const isHostRole = user.role === 'HOST' || user.role === 'EMPLOYEE';
 
-  const currentNav = navItems.find(x => x.id === tab) || { label: 'Dashboard' };
+  const navItems = isHostRole
+    ? [
+        { id: 'hostpanel', label: 'My Host Panel', icon: Icons.Dashboard, badge: pendingCount > 0 ? pendingCount : null }
+      ]
+    : [
+        { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard },
+        { id: 'register', label: 'Visitor Registration', icon: Icons.Register, roles: ['SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD'] },
+        { id: 'visitors', label: 'Visitor Directory', icon: Icons.Visitors, roles: ['SUPER_ADMIN', 'ADMIN', 'EXECUTIVE', 'RECEPTION', 'GUARD'] },
+        { id: 'reports', label: 'Reports & Analytics', icon: Icons.Reports, roles: ['SUPER_ADMIN', 'ADMIN', 'EXECUTIVE', 'RECEPTION'] },
+        { id: 'audit', label: 'Digital Audit Trail', icon: Icons.Audit, roles: ['SUPER_ADMIN', 'ADMIN', 'EXECUTIVE'] },
+        { id: 'masterdata', label: 'Master Data', icon: Icons.MasterData, roles: ['SUPER_ADMIN', 'ADMIN'] },
+        { id: 'usermanagement', label: 'User & Role Control', icon: Icons.Users, roles: ['SUPER_ADMIN', 'ADMIN'] }
+      ].filter(item => !item.roles || item.roles.includes(user.role));
+
+  const allowedTabIds = navItems.map(item => item.id);
+  const activeTab = allowedTabIds.includes(tab) ? tab : (allowedTabIds[0] || (isHostRole ? 'hostpanel' : 'dashboard'));
+  const currentNav = navItems.find(x => x.id === activeTab) || { label: isHostRole ? 'My Host Panel' : 'Dashboard' };
 
   return (
     <div className="app-container">
@@ -616,7 +778,7 @@ function Shell({ user, setUser, logout }) {
           <div className="nav-section-title">Navigation</div>
           {navItems.map(item => {
             const Icon = item.icon;
-            const isActive = tab === item.id;
+            const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
@@ -662,8 +824,8 @@ function Shell({ user, setUser, logout }) {
           </div>
 
           <div className="header-right">
-            {/* Download WebAPK Button - Admin Only */}
-            {user.role === 'ADMIN' && (
+            {/* Download WebAPK Button - Admin / Super Admin */}
+            {['SUPER_ADMIN', 'ADMIN'].includes(user.role) && (
               <button className="btn-webapk" onClick={() => setShowWebapkModal(true)} title="Download Android WebAPK Native Package">
                 <Icons.DownloadApp /> Download WebAPK
               </button>
@@ -699,8 +861,12 @@ function Shell({ user, setUser, logout }) {
                       ) : (
                         notifications.map(n => (
                           <div key={n.id} className={`notification-item ${!n.read ? 'unread' : ''}`} onClick={() => {
-                            if (n.type === 'VISITOR_REGISTERED') setTab('approvals');
-                            else if (n.type === 'VISITOR_ENTRY') setTab('visitors');
+                            if (isHostRole) {
+                              setTab('hostpanel');
+                            } else {
+                              if (n.type === 'VISITOR_REGISTERED' && allowedTabIds.includes('visitors')) setTab('visitors');
+                              else if (n.type === 'VISITOR_ENTRY' && allowedTabIds.includes('visitors')) setTab('visitors');
+                            }
                             setShowNotifDropdown(false);
                           }}>
                             <span className="notif-title">{n.title}</span>
@@ -715,8 +881,8 @@ function Shell({ user, setUser, logout }) {
               )}
             </div>
 
-            {/* SMTP Settings Button - Admin Only */}
-            {user.role === 'ADMIN' && (
+            {/* SMTP Settings Button - Admin / Super Admin */}
+            {['SUPER_ADMIN', 'ADMIN'].includes(user.role) && (
               <button className="btn-secondary" onClick={() => setShowSmtpModal(true)} title="Email SMTP Settings" style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 12px' }}>
                 <Icons.Mail /> SMTP
               </button>
@@ -730,13 +896,15 @@ function Shell({ user, setUser, logout }) {
         </header>
 
         <div className="content-body">
-          {tab === 'dashboard' && <Dashboard user={user} setTab={setTab} viewPass={viewPass} />}
-          {tab === 'register' && <Register user={user} setTab={setTab} viewPass={viewPass} />}
-          {tab === 'visitors' && <Visitors user={user} viewPass={viewPass} />}
-          {tab === 'approvals' && <Approvals user={user} refreshPending={refreshPending} />}
-          {tab === 'reports' && <Reports />}
-          {tab === 'audit' && <Audit />}
-          {tab === 'masterdata' && <MasterData />}
+          {activeTab === 'hostpanel' && <HostPanel user={user} viewPass={viewPass} refreshPending={refreshPending} />}
+          {activeTab === 'dashboard' && <Dashboard user={user} setTab={setTab} viewPass={viewPass} />}
+          {activeTab === 'register' && <Register user={user} setTab={setTab} viewPass={viewPass} />}
+          {activeTab === 'visitors' && <Visitors user={user} viewPass={viewPass} />}
+          {activeTab === 'approvals' && <Approvals user={user} refreshPending={refreshPending} />}
+          {activeTab === 'reports' && <Reports />}
+          {activeTab === 'audit' && <Audit />}
+          {activeTab === 'masterdata' && <MasterData />}
+          {activeTab === 'usermanagement' && <UserManagement currentUser={user} />}
         </div>
       </div>
 
@@ -861,10 +1029,10 @@ function Dashboard({ user, setTab, viewPass }) {
         <div className="panel">
           <div className="panel-header">
             <h3 className="panel-title">
-              <Icons.Visitors /> Recent Visitor Movements
+              <Icons.Visitors /> {(user.role === 'HOST' || user.role === 'EMPLOYEE') ? 'My Visitor Movements' : 'Recent Visitor Movements'}
             </h3>
             <button className="btn-secondary" onClick={() => setTab('visitors')}>
-              View All Directory
+              {(user.role === 'HOST' || user.role === 'EMPLOYEE') ? 'View My Visitors' : 'View All Directory'}
             </button>
           </div>
           <div className="panel-body" style={{ padding: '0' }}>
@@ -929,18 +1097,26 @@ function Dashboard({ user, setTab, viewPass }) {
             </div>
             <div className="panel-body">
               <div className="quick-actions-grid">
-                <button className="quick-action-btn" onClick={() => setTab('register')}>
-                  <Icons.Register />
-                  <span>+ New Visitor</span>
-                </button>
+                {(user.role === 'ADMIN' || user.role === 'GUARD' || user.role === 'RECEPTION') && (
+                  <button className="quick-action-btn" onClick={() => setTab('register')}>
+                    <Icons.Register />
+                    <span>+ New Visitor</span>
+                  </button>
+                )}
                 <button className="quick-action-btn" onClick={() => setTab('approvals')}>
                   <Icons.Approvals />
                   <span>Approvals</span>
                 </button>
-                <button className="quick-action-btn" onClick={() => setTab('reports')}>
-                  <Icons.Reports />
-                  <span>Print Report</span>
+                <button className="quick-action-btn" onClick={() => setTab('visitors')}>
+                  <Icons.Visitors />
+                  <span>{(user.role === 'HOST' || user.role === 'EMPLOYEE') ? 'My Visitors' : 'Visitor Logs'}</span>
                 </button>
+                {(user.role === 'ADMIN' || user.role === 'RECEPTION') && (
+                  <button className="quick-action-btn" onClick={() => setTab('reports')}>
+                    <Icons.Reports />
+                    <span>Print Report</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1350,12 +1526,12 @@ function Visitors({ user, viewPass }) {
 
   useEffect(load, [statusFilter]);
 
-  useEffect(() => {
-    api('/hosts').then(setHosts).catch(() => { });
-    api('/master/purposes').then(setPurposes).catch(() => { });
-  }, []);
-
   const canGate = user && ['GUARD', 'RECEPTION', 'ADMIN'].includes(user.role);
+
+  useEffect(() => {
+    if (canGate) api('/hosts').then(setHosts).catch(() => { });
+    api('/master/purposes').then(setPurposes).catch(() => { });
+  }, [canGate]);
 
   const doCheckIn = async (r) => {
     if (!confirm(`Check in ${r.name} now?`)) return;
@@ -1629,6 +1805,294 @@ function Visitors({ user, viewPass }) {
   );
 }
 
+// ================= DEDICATED HOST PANEL (ISOLATED WORKSPACE) =================
+function HostPanel({ user, viewPass, refreshPending }) {
+  const [approvals, setApprovals] = useState([]);
+  const [visitors, setVisitors] = useState([]);
+  const [stats, setStats] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [busyVisitId, setBusyVisitId] = useState(null);
+
+  const loadHostData = () => {
+    setLoading(true);
+    let vUrl = `/visitors?name=${encodeURIComponent(q)}`;
+    if (statusFilter) vUrl += `&status=${encodeURIComponent(statusFilter)}`;
+
+    Promise.all([
+      api('/approvals'),
+      api(vUrl),
+      api('/dashboard')
+    ])
+      .then(([a, v, s]) => {
+        setApprovals(a || []);
+        setVisitors(v || []);
+        setStats(s || {});
+      })
+      .catch(e => setErr(e.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(loadHostData, [statusFilter]);
+
+  const actOnApproval = async (visitId, action) => {
+    setBusyVisitId(visitId);
+    setMsg('');
+    setErr('');
+    try {
+      await api('/approvals/' + visitId, {
+        method: 'POST',
+        body: JSON.stringify({ action })
+      });
+      setMsg(`Visit successfully ${action === 'APPROVE' ? 'Approved' : 'Declined'}`);
+      loadHostData();
+      if (refreshPending) refreshPending();
+    } catch (e) {
+      setErr('Error: ' + e.message);
+    } finally {
+      setBusyVisitId(null);
+    }
+  };
+
+  const pendingList = approvals.filter(a => a.status === 'PENDING');
+
+  return (
+    <div className="host-panel-container">
+      {/* Host Banner */}
+      <div className="panel" style={{ marginBottom: '20px', background: 'linear-gradient(135deg, rgba(37,99,235,0.08) 0%, rgba(59,130,246,0.02) 100%)', border: '1px solid rgba(37,99,235,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800 }}>Welcome, {user.name}</h2>
+              <span className="badge badge-inside" style={{ fontSize: '11px' }}>Host Profile</span>
+            </div>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
+              🔒 <b>Private Host Workspace:</b> You are viewing visitor movements and approval requests specifically assigned to you ({user.department || 'General'}).
+            </p>
+          </div>
+          <button className="btn-secondary" onClick={loadHostData} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>🔄 Refresh Panel</span>
+          </button>
+        </div>
+      </div>
+
+      {msg && <div className="alert-box alert-success" style={{ marginBottom: '16px' }}>{msg}</div>}
+      {err && <div className="alert-box alert-error" style={{ marginBottom: '16px' }}>{err}</div>}
+
+      {/* Host Metrics */}
+      <div className="dashboard-grid" style={{ marginBottom: '24px' }}>
+        <div className="kpi-card" style={{ '--kpi-accent': '#f59e0b', '--kpi-bg': '#fffbeb' }}>
+          <div>
+            <div className="kpi-header">
+              <span className="kpi-title">Pending Approvals</span>
+              <div className="kpi-icon"><Icons.Approvals /></div>
+            </div>
+            <div className="kpi-value">{loading ? '...' : (pendingList.length)}</div>
+          </div>
+          <div className="kpi-footer"><span>●</span> Awaiting your review</div>
+        </div>
+        <div className="kpi-card" style={{ '--kpi-accent': '#10b981', '--kpi-bg': '#ecfdf5' }}>
+          <div>
+            <div className="kpi-header">
+              <span className="kpi-title">Currently Inside</span>
+              <div className="kpi-icon"><Icons.EntryExit /></div>
+            </div>
+            <div className="kpi-value">{loading ? '...' : (stats.currentVisitors ?? 0)}</div>
+          </div>
+          <div className="kpi-footer"><span>●</span> With you in facility</div>
+        </div>
+        <div className="kpi-card" style={{ '--kpi-accent': '#2563eb', '--kpi-bg': '#eff6ff' }}>
+          <div>
+            <div className="kpi-header">
+              <span className="kpi-title">Today\'s Visitors</span>
+              <div className="kpi-icon"><Icons.Visitors /></div>
+            </div>
+            <div className="kpi-value">{loading ? '...' : (stats.visitorsToday ?? 0)}</div>
+          </div>
+          <div className="kpi-footer"><span>●</span> Scheduled today</div>
+        </div>
+        <div className="kpi-card" style={{ '--kpi-accent': '#06b6d4', '--kpi-bg': '#ecfeff' }}>
+          <div>
+            <div className="kpi-header">
+              <span className="kpi-title">Completed Visits</span>
+              <div className="kpi-icon"><Icons.Reports /></div>
+            </div>
+            <div className="kpi-value">{loading ? '...' : (stats.exitedToday ?? 0)}</div>
+          </div>
+          <div className="kpi-footer"><span>●</span> Checked out today</div>
+        </div>
+      </div>
+
+      {/* Section 1: Pending Approvals for this Host */}
+      <div className="panel" style={{ marginBottom: '24px' }}>
+        <div className="panel-header">
+          <h3 className="panel-title">
+            <Icons.Approvals /> Action Required: My Pending Approvals
+            {pendingList.length > 0 && (
+              <span className="nav-badge" style={{ marginLeft: '8px', background: 'var(--danger)', color: '#fff' }}>
+                {pendingList.length}
+              </span>
+            )}
+          </h3>
+        </div>
+        <div className="panel-body" style={{ padding: 0 }}>
+          {loading ? (
+            <div style={{ padding: '30px', textAlign: 'center' }}>Loading approvals...</div>
+          ) : pendingList.length === 0 ? (
+            <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>
+              ✅ You have no pending visitor approval requests. All caught up!
+            </div>
+          ) : (
+            <div className="table-container" style={{ border: 'none', boxShadow: 'none' }}>
+              <table className="custom-table">
+                <thead>
+                  <tr>
+                    <th>Visitor Details</th>
+                    <th>Organization</th>
+                    <th>Purpose of Meeting</th>
+                    <th>Pass ID</th>
+                    <th>Decision</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingList.map(a => (
+                    <tr key={a.id}>
+                      <td>
+                        <div style={{ fontWeight: 700 }}>{a.visitor_name}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>📱 {a.mobile}</div>
+                      </td>
+                      <td>{a.company || 'Individual Guest'}</td>
+                      <td>
+                        <span style={{ fontWeight: 600 }}>{a.purpose}</span>
+                      </td>
+                      <td>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--primary)' }}>
+                          {a.visitor_code}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            className="btn-success"
+                            disabled={busyVisitId === a.visit_id}
+                            onClick={() => actOnApproval(a.visit_id, 'APPROVE')}
+                          >
+                            {busyVisitId === a.visit_id ? '...' : '✓ Approve'}
+                          </button>
+                          <button
+                            className="btn-danger"
+                            disabled={busyVisitId === a.visit_id}
+                            onClick={() => actOnApproval(a.visit_id, 'DECLINE')}
+                          >
+                            {busyVisitId === a.visit_id ? '...' : '✕ Decline'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Section 2: My Visitors Directory & Passes */}
+      <div className="panel">
+        <div className="panel-header">
+          <h3 className="panel-title">
+            <Icons.Visitors /> My Visitor Records & Digital Passes
+          </h3>
+        </div>
+        <div className="panel-body">
+          <div className="toolbar-container" style={{ marginBottom: '16px' }}>
+            <div className="search-input-group">
+              <input
+                className="form-control"
+                placeholder="Search by visitor name..."
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && loadHostData()}
+              />
+              <button className="btn-primary" onClick={loadHostData}>Search</button>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {['', 'INSIDE', 'APPROVED', 'PENDING_APPROVAL', 'CLOSED', 'REJECTED'].map(s => (
+                <button
+                  key={s}
+                  className={`btn-secondary ${statusFilter === s ? 'btn-primary' : ''}`}
+                  style={{ padding: '7px 12px', fontSize: '12px' }}
+                  onClick={() => setStatusFilter(s)}
+                >
+                  {s === '' ? 'All My Visitors' : s.replace('_', ' ')}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="table-container" style={{ border: 'none', boxShadow: 'none' }}>
+            <table className="custom-table">
+              <thead>
+                <tr>
+                  <th>Pass Code</th>
+                  <th>Visitor</th>
+                  <th>Purpose</th>
+                  <th>Status</th>
+                  <th>Entry / Exit</th>
+                  <th>Digital Badge</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px' }}>Loading visitors...</td></tr>
+                ) : visitors.length === 0 ? (
+                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No visitors found matching filter.</td></tr>
+                ) : (
+                  visitors.map(v => (
+                    <tr key={v.visit_id || v.id}>
+                      <td>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--primary)' }}>
+                          {v.visitor_code}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 700 }}>{v.name}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          {v.company || 'Individual'} • {v.mobile}
+                        </div>
+                      </td>
+                      <td>{v.purpose}</td>
+                      <td><StatusBadge status={v.status} /></td>
+                      <td>
+                        <div style={{ fontSize: '12px' }}>
+                          <div>In: {v.entry_time ? fmtDateTime(v.entry_time) : <span style={{ color: 'var(--text-muted)' }}>-</span>}</div>
+                          <div>Out: {v.exit_time ? fmtDateTime(v.exit_time) : <span style={{ color: 'var(--text-muted)' }}>-</span>}</div>
+                        </div>
+                      </td>
+                      <td>
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: '5px 10px', fontSize: '12px' }}
+                          onClick={() => viewPass(v.visit_id)}
+                        >
+                          Digital Pass
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ================= HOST APPROVALS VIEW =================
 function Approvals({ user, refreshPending }) {
   const [approvals, setApprovals] = useState([]);
@@ -1699,14 +2163,18 @@ function Approvals({ user, refreshPending }) {
                     <td><StatusBadge status={a.status} /></td>
                     <td>
                       {a.status === 'PENDING' ? (
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button className="btn-success" onClick={() => act(a.visit_id, 'APPROVE')}>
-                            Approve
-                          </button>
-                          <button className="btn-danger" onClick={() => act(a.visit_id, 'DECLINE')}>
-                            Decline
-                          </button>
-                        </div>
+                        user && user.role === 'EXECUTIVE' ? (
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: '600' }}>🔒 Executive View (Read-Only)</span>
+                        ) : (
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button className="btn-success" onClick={() => act(a.visit_id, 'APPROVE')}>
+                              Approve
+                            </button>
+                            <button className="btn-danger" onClick={() => act(a.visit_id, 'DECLINE')}>
+                              Decline
+                            </button>
+                          </div>
+                        )
                       ) : (
                         <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: '600' }}>Completed</span>
                       )}
@@ -2445,6 +2913,351 @@ function MasterData() {
                     <td>
                       <button className="btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', marginRight: '4px' }} onClick={() => startEdit(it)}>Edit</button>
                       <button className="btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }} onClick={() => remove(it.id)}>Remove</button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================= USER ROLE MANAGEMENT VIEW =================
+function UserManagement({ currentUser }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState('');
+  const [search, setSearch] = useState('');
+  const [editId, setEditId] = useState(null);
+
+  // Form State
+  const [form, setForm] = useState({
+    username: '',
+    password: '',
+    name: '',
+    role: 'HOST',
+    department: '',
+    email: '',
+    active: true
+  });
+
+  const resetForm = () => {
+    setForm({
+      username: '',
+      password: '',
+      name: '',
+      role: 'HOST',
+      department: '',
+      email: '',
+      active: true
+    });
+    setEditId(null);
+  };
+
+  const loadUsers = () => {
+    setLoading(true);
+    api('/users')
+      .then(setUsers)
+      .catch(err => setMsg('Error loading users: ' + err.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(loadUsers, []);
+
+  const handleFieldChange = (key, val) => {
+    setForm(prev => ({ ...prev, [key]: val }));
+  };
+
+  const startEdit = (u) => {
+    setEditId(u.id);
+    setForm({
+      username: u.username || '',
+      password: '',
+      name: u.name || '',
+      role: u.role || 'HOST',
+      department: u.department || '',
+      email: u.email || '',
+      active: u.active !== 0
+    });
+    setMsg('');
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setMsg('');
+    if (!form.name || !form.role) {
+      setMsg('Error: Full Name and User Role are required.');
+      return;
+    }
+
+    try {
+      if (editId) {
+        await api(`/users/${editId}`, {
+          method: 'PUT',
+          body: JSON.stringify(form)
+        });
+        setMsg(`User profile "${form.name}" updated successfully!`);
+      } else {
+        if (!form.username || !form.password) {
+          setMsg('Error: Username and Password are required for new user accounts.');
+          return;
+        }
+        await api('/users', {
+          method: 'POST',
+          body: JSON.stringify(form)
+        });
+        setMsg(`New user account "${form.name}" created successfully!`);
+      }
+      resetForm();
+      loadUsers();
+    } catch (err) {
+      setMsg('Error: ' + err.message);
+    }
+  };
+
+  const toggleDeactivate = async (u) => {
+    if (!confirm(`Are you sure you want to ${u.active ? 'deactivate' : 'reactivate'} ${u.name}?`)) return;
+    try {
+      if (u.active) {
+        await api(`/users/${u.id}`, { method: 'DELETE' });
+      } else {
+        await api(`/users/${u.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ active: true })
+        });
+      }
+      setMsg(`User "${u.name}" status updated.`);
+      loadUsers();
+    } catch (err) {
+      setMsg('Error: ' + err.message);
+    }
+  };
+
+  const filteredUsers = users.filter(u =>
+    (u.name && u.name.toLowerCase().includes(search.toLowerCase())) ||
+    (u.username && u.username.toLowerCase().includes(search.toLowerCase())) ||
+    (u.email && u.email.toLowerCase().includes(search.toLowerCase())) ||
+    (u.role && u.role.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const getRoleBadgeClass = (role) => {
+    switch (role) {
+      case 'SUPER_ADMIN': return 'badge-inside';
+      case 'ADMIN': return 'badge-approved';
+      case 'EXECUTIVE': return 'badge-pending';
+      case 'RECEPTION': return 'badge-inside';
+      case 'GUARD': return 'badge-closed';
+      default: return 'badge-approved';
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h3 className="panel-title">
+          <Icons.Users /> Role & User Access Control
+        </h3>
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: '600' }}>
+          Logged in as: <strong>{currentUser.role}</strong>
+        </span>
+      </div>
+
+      <div className="panel-body">
+        {msg && (
+          <div className={`alert-box ${msg.startsWith('Error') ? 'alert-error' : 'alert-success'}`}>
+            <strong>{msg}</strong>
+          </div>
+        )}
+
+        {/* User Account Form (Create / Edit) */}
+        <div className="panel" style={{ marginBottom: '24px', background: 'var(--bg-card-subtle)' }}>
+          <div className="panel-header" style={{ padding: '12px 20px' }}>
+            <h4 style={{ margin: 0, fontSize: '15px' }}>
+              {editId ? `✏️ Edit User Account (#${editId})` : '➕ Add New System User'}
+            </h4>
+          </div>
+          <div className="panel-body">
+            <form onSubmit={handleSubmit} className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Full Name <span className="req">*</span></label>
+                <input
+                  className="form-control"
+                  placeholder="e.g. Sanjiv Kumar"
+                  value={form.name}
+                  onChange={e => handleFieldChange('name', e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Username / Login ID <span className="req">*</span></label>
+                <input
+                  className="form-control"
+                  placeholder="e.g. sanjiv.reception"
+                  value={form.username}
+                  onChange={e => handleFieldChange('username', e.target.value)}
+                  disabled={!!editId}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">
+                  {editId ? 'New Password (leave blank to keep current)' : 'Account Password *'}
+                </label>
+                <input
+                  type="password"
+                  className="form-control"
+                  placeholder={editId ? '••••••••' : 'Enter password'}
+                  value={form.password}
+                  onChange={e => handleFieldChange('password', e.target.value)}
+                  required={!editId}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Role Assignment <span className="req">*</span></label>
+                <select
+                  className="form-control"
+                  value={form.role}
+                  onChange={e => handleFieldChange('role', e.target.value)}
+                >
+                  {currentUser.role === 'SUPER_ADMIN' && (
+                    <option value="SUPER_ADMIN">👑 Super Admin / Developer</option>
+                  )}
+                  <option value="ADMIN">🛡️ Admin</option>
+                  <option value="EXECUTIVE">💼 CEO / Executive View</option>
+                  <option value="RECEPTION">🏢 Reception Access (General Check-In/Out)</option>
+                  <option value="GUARD">🚪 Security Guard (Gate Check-In/Out)</option>
+                  <option value="HOST">👤 Standard Host (Restricted to Own Data)</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Department / Unit</label>
+                <input
+                  className="form-control"
+                  placeholder="e.g. Front Desk, Executive"
+                  value={form.department}
+                  onChange={e => handleFieldChange('department', e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Work Email Address</label>
+                <input
+                  type="email"
+                  className="form-control"
+                  placeholder="e.g. sanjiv@opsvision.com"
+                  value={form.email}
+                  onChange={e => handleFieldChange('email', e.target.value)}
+                />
+              </div>
+
+              <div className="form-group full-width" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  id="userActiveCheck"
+                  checked={form.active}
+                  onChange={e => handleFieldChange('active', e.target.checked)}
+                />
+                <label htmlFor="userActiveCheck" className="checkbox-label" style={{ marginBottom: 0 }}>
+                  Active Account (Allowed to sign in)
+                </label>
+              </div>
+
+              <div className="form-group full-width" style={{ display: 'flex', gap: '10px' }}>
+                <button type="submit" className="btn-primary">
+                  {editId ? 'Save Account Changes' : 'Create User Account'}
+                </button>
+                {editId && (
+                  <button type="button" className="btn-secondary" onClick={resetForm}>
+                    Cancel Edit
+                  </button>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+
+        {/* Search Toolbar */}
+        <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+          <input
+            className="form-control"
+            style={{ maxWidth: '360px' }}
+            placeholder="Search users by name, email, or role..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: '600' }}>
+            Showing {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {/* Users Table */}
+        <div className="table-container" style={{ border: 'none', boxShadow: 'none' }}>
+          <table className="custom-table">
+            <thead>
+              <tr>
+                <th>User Details</th>
+                <th>Username</th>
+                <th>Assigned Matrix Role</th>
+                <th>Department</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px' }}>Loading system users...</td></tr>
+              ) : filteredUsers.length === 0 ? (
+                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No user accounts found matching criteria.</td></tr>
+              ) : (
+                filteredUsers.map(u => (
+                  <tr key={u.id}>
+                    <td>
+                      <div style={{ fontWeight: '700' }}>{u.name}</div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{u.email || 'No email registered'}</div>
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{u.username}</td>
+                    <td>
+                      <span className={`badge ${getRoleBadgeClass(u.role)}`}>
+                        {u.role}
+                      </span>
+                    </td>
+                    <td>{u.department || '—'}</td>
+                    <td>
+                      {u.active !== 0 ? (
+                        <span style={{ color: 'var(--success)', fontWeight: 700 }}>Active</span>
+                      ) : (
+                        <span style={{ color: 'var(--danger)', fontWeight: 700 }}>Inactive</span>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: '4px 10px', fontSize: '12px' }}
+                          onClick={() => startEdit(u)}
+                        >
+                          Edit Profile
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          style={{
+                            padding: '4px 10px',
+                            fontSize: '12px',
+                            color: u.active !== 0 ? 'var(--danger)' : 'var(--success)',
+                            borderColor: u.active !== 0 ? 'var(--danger-border)' : 'var(--success)'
+                          }}
+                          onClick={() => toggleDeactivate(u)}
+                        >
+                          {u.active !== 0 ? 'Deactivate' : 'Reactivate'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
