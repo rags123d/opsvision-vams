@@ -3,7 +3,7 @@
 :root {
   --font-main: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
-  
+
   /* Light theme (default) */
   --bg-app: #f7f8ff;
   --bg-card: #ffffff;
@@ -11,7 +11,7 @@
   --bg-hover: #e9efff;
   --table-header-bg: #f3f6ff;
   --app-background: radial-gradient(circle at 100% 0%, rgba(236, 72, 153, 0.1), transparent 28%), radial-gradient(circle at 0% 100%, rgba(91, 75, 219, 0.1), transparent 32%);
-  
+
   --sidebar-bg: #f5f3ff;
   --sidebar-header: #ede9fe;
   --sidebar-hover: #e9e4ff;
@@ -19,37 +19,37 @@
   --sidebar-text: #4c1d95;
   --sidebar-text-active: #ffffff;
   --sidebar-border: #ddd6fe;
-  
+
   --text-main: #0f172a;
   --text-muted: #64748b;
   --text-light: #94a3b8;
-  
+
   --top-header-bg: #ffffff;
-  
+
   /* Accent colors */
   --primary: #5b4bdb;
   --primary-hover: #4938c8;
   --primary-light: #eeedff;
   --primary-glow: rgba(91, 75, 219, 0.22);
-  
+
   --success: #10b981;
   --success-light: #ecfdf5;
   --success-border: #a7f3d0;
-  
+
   --warning: #f59e0b;
   --warning-light: #fffbeb;
   --warning-border: #fde68a;
-  
+
   --danger: #ef4444;
   --danger-light: #fef2f2;
   --danger-border: #fecaca;
-  
+
   --purple: #8b5cf6;
   --purple-light: #f5f3ff;
-  
+
   --cyan: #06b6d4;
   --cyan-light: #ecfeff;
-  
+
   /* New light‑theme accent variables */
   --accent-1: #6d4ee8;
   --accent-2: #ec4899;
@@ -57,21 +57,21 @@
   --card-bg-light: #fffdf7;
   --button-bg-light: var(--accent-1);
   --badge-bg-light: var(--accent-2);
-  
+
   --border-color: #dce2f0;
   --border-focus: #6d4ee8;
-  
+
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
-  
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
   --radius-full: 9999px;
-  
+
   --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -83,18 +83,18 @@
   --bg-hover: #26334a;
   --table-header-bg: #162238;
   --app-background: none;
-  
+
   --sidebar-bg: #0f172a;
   --sidebar-header: #090e1a;
   --sidebar-hover: #1e293b;
   --sidebar-active: #2563eb;
   --sidebar-text: #94a3b8;
   --sidebar-border: #1e293b;
-  
+
   --text-main: #f8fafc;
   --text-muted: #cbd5e1;
   --text-light: #94a3b8;
-  
+
   --top-header-bg: #1e293b;
   --primary: #8b7cff;
   --primary-hover: #a59bff;
@@ -188,7 +188,10 @@ body {
   cursor: pointer;
   padding: 6px;
   border-radius: var(--radius-sm);
-  margin-left: auto;
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
   transition: var(--transition);
 }
 
@@ -214,12 +217,14 @@ body {
 }
 
 .sidebar-brand {
-  padding: 24px 20px;
+  padding: 20px 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  position: relative;
   background: var(--sidebar-header);
   border-bottom: 1px solid var(--sidebar-border);
+  min-height: 96px;
 }
 
 .brand-icon-box {
@@ -470,9 +475,17 @@ body {
 }
 
 @keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
-  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  }
+
+  70% {
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
 }
 
 .header-right {
@@ -970,8 +983,15 @@ body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: scale(0.98); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .pass-card {
@@ -1154,12 +1174,21 @@ body {
 }
 
 .sidebar-logo-img {
-  width: 44px;
-  height: 44px;
+  height: 72px;
+  width: auto;
+  max-width: 210px;
   object-fit: contain;
   background: transparent;
   padding: 0;
+  margin: 0 auto;
+  display: block;
   flex-shrink: 0;
+  transition: var(--transition);
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.08));
+}
+
+.sidebar-logo-img:hover {
+  transform: scale(1.04);
 }
 
 .pass-header-logo {
@@ -1210,9 +1239,11 @@ body {
   .hamburger-btn {
     display: flex;
   }
+
   .mobile-close-btn {
     display: flex;
   }
+
   .sidebar {
     width: 280px;
     max-width: 85vw;
@@ -1220,12 +1251,15 @@ body {
     transform: translateX(-100%);
     box-shadow: var(--shadow-xl);
   }
+
   .sidebar.mobile-open {
     transform: translateX(0);
   }
+
   .main-wrapper {
     margin-left: 0;
   }
+
   .dashboard-columns {
     grid-template-columns: 1fr;
   }
@@ -1235,20 +1269,25 @@ body {
   .form-grid {
     grid-template-columns: 1fr;
   }
+
   .top-header {
     padding: 0 16px;
     height: 64px;
   }
+
   .content-body {
     padding: 16px;
   }
+
   .toolbar-container {
     flex-direction: column;
     align-items: stretch;
   }
+
   .search-input-group {
     max-width: 100%;
   }
+
   .quick-login-pills {
     grid-template-columns: 1fr 1fr;
   }
@@ -1259,47 +1298,60 @@ body {
     padding: 0 12px;
     gap: 8px;
   }
+
   .header-left {
     gap: 10px;
     min-width: 0;
   }
+
   .page-heading {
     font-size: 16px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
   .header-right {
     gap: 8px;
   }
+
   .clock-badge {
     display: none;
   }
+
   .btn-webapk {
     padding: 6px 10px;
     font-size: 11px;
   }
+
   .content-body {
     padding: 12px;
   }
+
   .dashboard-grid {
     grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
     gap: 10px;
   }
+
   .kpi-card {
     padding: 14px;
   }
+
   .kpi-value {
     font-size: 22px;
   }
+
   .kpi-title {
     font-size: 10px;
   }
+
   .kpi-icon {
     width: 32px;
     height: 32px;
   }
-  .pass-card, .webapk-modal-card {
+
+  .pass-card,
+  .webapk-modal-card {
     max-width: 95vw !important;
     max-height: 90vh !important;
   }
@@ -1382,8 +1434,15 @@ body {
 }
 
 @keyframes popIn {
-  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .notification-header {
@@ -1472,8 +1531,15 @@ body {
 }
 
 @keyframes slideInRight {
-  from { opacity: 0; transform: translateX(50px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .vams-toast-icon {
@@ -1551,4 +1617,3 @@ body {
   text-transform: uppercase;
   margin-bottom: 10px;
 }
-
