@@ -603,10 +603,7 @@ function Shell({ user, setUser, logout }) {
       {/* ================= LEFT SIDEBAR ================= */}
       <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
-          <img src="/logo.png" alt="Swagatham Logo" className="sidebar-logo-img" />
-          <div className="brand-text">
-            <h1>Swagatham</h1>
-          </div>
+          <img src="/logo.png" alt="Swagatham - Visitor Management System" className="sidebar-logo-img" />
           <button className="mobile-close-btn" onClick={() => setMobileMenuOpen(false)} title="Close Menu">
             <Icons.Close />
           </button>
@@ -662,13 +659,6 @@ function Shell({ user, setUser, logout }) {
           </div>
 
           <div className="header-right">
-            {/* Download WebAPK Button - Admin Only */}
-            {user.role === 'ADMIN' && (
-              <button className="btn-webapk" onClick={() => setShowWebapkModal(true)} title="Download Android WebAPK Native Package">
-                <Icons.DownloadApp /> Download WebAPK
-              </button>
-            )}
-
             {/* Notification Bell Dropdown */}
             <div className="nav-actions">
               <button className="notification-bell-btn" onClick={() => setShowNotifDropdown(!showNotifDropdown)} title="Notifications">
