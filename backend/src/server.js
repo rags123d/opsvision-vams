@@ -26,11 +26,12 @@ db.transaction = (fn) => (...args) => {
 };
 
 const schema = `
-CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT UNIQUE,password TEXT NOT NULL,name TEXT NOT NULL,role TEXT NOT NULL,department TEXT,email TEXT,active INTEGER DEFAULT 1);
-CREATE TABLE IF NOT EXISTS visitors(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,mobile TEXT NOT NULL,email TEXT,company TEXT,purpose TEXT NOT NULL,host_id INTEGER,department TEXT,vehicle TEXT,photo TEXT,consent INTEGER DEFAULT 0,otp TEXT,otp_verified INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(host_id) REFERENCES users(id));
-CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY AUTOINCREMENT,visitor_id INTEGER NOT NULL,visitor_code TEXT UNIQUE NOT NULL,entry_time TEXT,exit_time TEXT,entry_guard_id INTEGER,exit_guard_id INTEGER,status TEXT DEFAULT 'PENDING_APPROVAL',valid_until TEXT,expected_checkin TEXT,expected_checkout TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(visitor_id) REFERENCES visitors(id),FOREIGN KEY(entry_guard_id) REFERENCES users(id),FOREIGN KEY(exit_guard_id) REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT UNIQUE,password TEXT NOT NULL,name TEXT NOT NULL,role TEXT NOT NULL,department TEXT,email TEXT,phone TEXT,last_login TEXT,active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS visitors(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,mobile TEXT NOT NULL,email TEXT,company TEXT,purpose TEXT NOT NULL,host_id INTEGER,department TEXT,vehicle TEXT,photo TEXT,consent INTEGER DEFAULT 0,otp TEXT,otp_verified INTEGER DEFAULT 0,blocked INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(host_id) REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY AUTOINCREMENT,visitor_id INTEGER NOT NULL,visitor_code TEXT UNIQUE NOT NULL,entry_time TEXT,exit_time TEXT,entry_guard_id INTEGER,exit_guard_id INTEGER,status TEXT DEFAULT 'PENDING_HOST_REVIEW',valid_until TEXT,expected_checkin TEXT,expected_checkout TEXT,initiator_type TEXT DEFAULT 'SELF_REGISTERED',expected_arrival_time TEXT,proposed_arrival_time TEXT,rejection_reason TEXT,created_by INTEGER,approved_by INTEGER,pass_token TEXT UNIQUE,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(visitor_id) REFERENCES visitors(id),FOREIGN KEY(entry_guard_id) REFERENCES users(id),FOREIGN KEY(exit_guard_id) REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS approvals(id INTEGER PRIMARY KEY AUTOINCREMENT,visit_id INTEGER NOT NULL,host_id INTEGER NOT NULL,status TEXT DEFAULT 'PENDING',action_time TEXT,notes TEXT,FOREIGN KEY(visit_id) REFERENCES visits(id),FOREIGN KEY(host_id) REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,actor_id INTEGER,action TEXT,entity TEXT,entity_id INTEGER,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS pass_state_history(id INTEGER PRIMARY KEY AUTOINCREMENT,visit_id INTEGER NOT NULL,from_status TEXT,to_status TEXT NOT NULL,actor_id INTEGER,actor_type TEXT NOT NULL,notes TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,code TEXT UNIQUE,description TEXT,active INTEGER DEFAULT 1,color TEXT DEFAULT '#3b82f6');
 CREATE TABLE IF NOT EXISTS purposes(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT,active INTEGER DEFAULT 1,color TEXT DEFAULT '#3b82f6');
 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,type TEXT NOT NULL,title TEXT NOT NULL,message TEXT NOT NULL,read INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,link_id INTEGER);
@@ -38,7 +39,10 @@ CREATE TABLE IF NOT EXISTS system_settings(key TEXT PRIMARY KEY,value TEXT);
 `;
 db.exec(schema);
 
+// Migration Columns Addition for existing databases
 try { db.exec("ALTER TABLE users ADD COLUMN email TEXT"); } catch(e) {}
+try { db.exec("ALTER TABLE users ADD COLUMN phone TEXT"); } catch(e) {}
+try { db.exec("ALTER TABLE users ADD COLUMN last_login TEXT"); } catch(e) {}
 try { db.exec("ALTER TABLE visits ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"); } catch(e) {}
 try { db.exec("ALTER TABLE departments ADD COLUMN color TEXT DEFAULT '#3b82f6'"); } catch(e) {}
 try { db.exec("ALTER TABLE purposes ADD COLUMN color TEXT DEFAULT '#3b82f6'"); } catch(e) {}
@@ -48,8 +52,20 @@ try { db.exec("ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1"); } catch(
 try { db.exec("UPDATE users SET active=1 WHERE active IS NULL"); } catch(e) {}
 try { db.exec("ALTER TABLE visitors ADD COLUMN blocked INTEGER DEFAULT 0"); } catch(e) {}
 try { db.exec("UPDATE visitors SET blocked=0 WHERE blocked IS NULL"); } catch(e) {}
-try { db.exec("UPDATE departments SET color='#3b82f6' WHERE color IS NULL"); } catch(e) {}
-try { db.exec("UPDATE purposes SET color='#3b82f6' WHERE color IS NULL"); } catch(e) {}
+
+// Pre-Approval & State Machine Columns
+try { db.exec("ALTER TABLE visits ADD COLUMN initiator_type TEXT DEFAULT 'SELF_REGISTERED'"); } catch(e) {}
+try { db.exec("ALTER TABLE visits ADD COLUMN expected_arrival_time TEXT"); } catch(e) {}
+try { db.exec("ALTER TABLE visits ADD COLUMN proposed_arrival_time TEXT"); } catch(e) {}
+try { db.exec("ALTER TABLE visits ADD COLUMN rejection_reason TEXT"); } catch(e) {}
+try { db.exec("ALTER TABLE visits ADD COLUMN created_by INTEGER"); } catch(e) {}
+try { db.exec("ALTER TABLE visits ADD COLUMN approved_by INTEGER"); } catch(e) {}
+try { db.exec("ALTER TABLE visits ADD COLUMN pass_token TEXT"); } catch(e) {}
+
+// Normalize legacy statuses
+try { db.exec("UPDATE visits SET status='PENDING_HOST_REVIEW' WHERE status='PENDING_APPROVAL' OR status='PENDING'"); } catch(e) {}
+try { db.exec("UPDATE visits SET status='CHECKED_IN' WHERE status='INSIDE'"); } catch(e) {}
+try { db.exec("UPDATE visits SET status='CHECKED_OUT' WHERE status='CLOSED'"); } catch(e) {}
 
 // System Settings Helper
 function getSetting(key) {
@@ -79,7 +95,7 @@ async function sendEmail({ to, subject, html, text }) {
   }
   const config = getSmtpConfig();
   if (!config.user || !config.pass) {
-    console.log(`[VAMS EMAIL SIMULATION] (Configure Google Workspace SMTP credentials in Admin Settings)\nRecipient: ${to}\nSubject: ${subject}\nSnippet: ${(text || html || '').slice(0, 120)}...`);
+    console.log(`[VAMS EMAIL SIMULATION]\nRecipient: ${to}\nSubject: ${subject}\nSnippet: ${(text || html || '').slice(0, 120)}...`);
     return { success: true, simulated: true };
   }
   try {
@@ -116,17 +132,42 @@ function createNotification({ user_id = null, type, title, message, link_id = nu
   }
 }
 
-const count = db.prepare('SELECT COUNT(*) c FROM users').get().c;
-if (!count) {
+// Pass Audit / State History Logger
+function logPassStateChange(visitId, fromStatus, toStatus, actorId, actorType, notes = '') {
+  try {
+    db.prepare('INSERT INTO pass_state_history(visit_id,from_status,to_status,actor_id,actor_type,notes) VALUES(?,?,?,?,?,?)')
+      .run(visitId, fromStatus || '', toStatus, actorId || null, actorType || 'SYSTEM', notes || '');
+  } catch (e) {
+    console.error('[PASS STATE HISTORY ERROR]', e.message);
+  }
+}
+
+// Seed Users for All Roles
+const uCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
+if (!uCount) {
   const add = db.prepare('INSERT INTO users(username,password,name,role,department,email) VALUES(?,?,?,?,?,?)');
+  add.run('superadmin', bcrypt.hashSync('super123', 10), 'Super Administrator', 'SUPER_ADMIN', 'Executive', 'superadmin@opsvision.com');
   add.run('admin', bcrypt.hashSync('admin123', 10), 'System Administrator', 'ADMIN', 'Administration', 'admin@opsvision.com');
+  add.run('ceo', bcrypt.hashSync('ceo123', 10), 'Chief Executive Officer', 'CEO', 'Executive', 'ceo@opsvision.com');
   add.run('guard', bcrypt.hashSync('guard123', 10), 'Security Guard', 'GUARD', 'Security', 'guard@opsvision.com');
   add.run('reception', bcrypt.hashSync('reception123', 10), 'Reception Desk', 'RECEPTION', 'Reception', 'reception@opsvision.com');
-  add.run('employee', bcrypt.hashSync('employee123', 10), 'Demo Host', 'EMPLOYEE', 'Operations', 'host.demo@opsvision.com');
+  add.run('employee', bcrypt.hashSync('employee123', 10), 'Demo Host', 'HOST', 'Operations', 'host.demo@opsvision.com');
+}
+
+// Ensure CEO and SUPER_ADMIN exist even if users table already had initial seeds
+const superAdminCheck = db.prepare("SELECT id FROM users WHERE username='superadmin'").get();
+if (!superAdminCheck) {
+  db.prepare('INSERT INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,1)')
+    .run('superadmin', bcrypt.hashSync('super123', 10), 'Super Administrator', 'SUPER_ADMIN', 'Executive', 'superadmin@opsvision.com');
+}
+const ceoCheck = db.prepare("SELECT id FROM users WHERE username='ceo'").get();
+if (!ceoCheck) {
+  db.prepare('INSERT INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,1)')
+    .run('ceo', bcrypt.hashSync('ceo123', 10), 'Chief Executive Officer', 'CEO', 'Executive', 'ceo@opsvision.com');
 }
 
 // Seed default "Person to Meet (Host)" master data if not present
-const hCount = db.prepare("SELECT COUNT(*) c FROM users WHERE role='HOST'").get().c;
+const hCount = db.prepare("SELECT COUNT(*) c FROM users WHERE role='HOST' OR role='EMPLOYEE'").get().c;
 if (!hCount) {
   const hs = db.prepare('INSERT OR IGNORE INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,1)');
   const hostData = [
@@ -189,38 +230,93 @@ function auth(req, res, next) {
     return res.status(401).json({ message: 'Unauthorized' });
   }
 }
+
+// Role Guard supporting inherited permissions (SUPER_ADMIN can access all ADMIN routes)
 function roles(...rs) {
-  return (req, res, next) => rs.includes(req.user.role) ? next() : res.status(403).json({ message: 'Forbidden' });
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    if (req.user.role === 'SUPER_ADMIN') return next();
+    if (rs.includes(req.user.role)) return next();
+    return res.status(403).json({ message: 'Forbidden: Access denied for your role' });
+  };
 }
+
 function audit(actor, action, entity, id, details = '') {
   db.prepare('INSERT INTO audit_logs(actor_id,action,entity,entity_id,details) VALUES(?,?,?,?,?)').run(actor, action, entity, id, details);
 }
 
-function dashboard() {
+// Scoped Dashboard Function
+function dashboard(user = null) {
   const today = new Date().toISOString().slice(0, 10);
+  let userClause = '';
+  const paramsToday = [today];
+  const paramsGlobal = [];
+
+  // Scoped to specific Host if role is HOST or EMPLOYEE
+  if (user && (user.role === 'HOST' || user.role === 'EMPLOYEE')) {
+    userClause = ' AND v.host_id=?';
+    paramsToday.push(user.id);
+    paramsGlobal.push(user.id);
+  }
+
+  const visitsToday = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE substr(x.created_at,1,10)=?${userClause}`).get(...paramsToday).c;
+  const currentVisitors = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE (x.status='INSIDE' OR x.status='CHECKED_IN')${userClause}`).get(...paramsGlobal).c;
+  const rejected = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE x.status='REJECTED'${userClause}`).get(...paramsGlobal).c;
+  const pendingApprovals = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE (x.status='PENDING_HOST_REVIEW' OR x.status='PENDING_APPROVAL' OR x.status='PENDING_VISITOR_CONFIRMATION')${userClause}`).get(...paramsGlobal).c;
+  const approved = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE x.status='APPROVED'${userClause}`).get(...paramsGlobal).c;
+  const exitedToday = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE (x.status='CLOSED' OR x.status='CHECKED_OUT') AND substr(x.exit_time,1,10)=?${userClause}`).get(...paramsToday).c;
+
   return {
-    visitorsToday: db.prepare("SELECT COUNT(*) c FROM visits WHERE substr(created_at,1,10)=?").get(today).c,
-    currentVisitors: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='INSIDE'").get().c,
-    rejected: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='REJECTED'").get().c,
-    pendingOtp: db.prepare("SELECT COUNT(*) c FROM visitors WHERE otp_verified=0 AND otp IS NOT NULL").get().c,
-    blocked: db.prepare("SELECT COUNT(*) c FROM visitors WHERE blocked=1").get().c,
-    pendingApprovals: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='PENDING_APPROVAL'").get().c,
-    waiting: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='PENDING_APPROVAL'").get().c,
-    approved: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='APPROVED'").get().c,
-    exitedToday: db.prepare("SELECT COUNT(*) c FROM visits WHERE status='CLOSED' AND substr(exit_time,1,10)=?").get(today).c
+    visitorsToday: visitsToday,
+    currentVisitors,
+    rejected,
+    pendingApprovals,
+    waiting: pendingApprovals,
+    approved,
+    exitedToday
   };
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'OpsVision VAMS' }));
 
+// Public Host Registration Endpoint (Self Registration by Host)
+app.post('/api/auth/register-host', (req, res) => {
+  const { name, email, password, department, phone } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required' });
+  
+  const cleanEmail = email.trim().toLowerCase();
+  const existing = db.prepare('SELECT id FROM users WHERE email=? OR username=?').get(cleanEmail, cleanEmail);
+  if (existing) return res.status(400).json({ message: 'A host account with this email already exists' });
+
+  const username = cleanEmail.split('@')[0] + '_' + Math.floor(100 + Math.random() * 900);
+  const passHash = bcrypt.hashSync(password, 10);
+
+  const r = db.prepare('INSERT INTO users(username,password,name,role,department,email,phone,active) VALUES(?,?,?,?,?,?,?,1)')
+    .run(username, passHash, name, 'HOST', department || 'General', cleanEmail, phone || '');
+
+  const newUserId = r.lastInsertRowid;
+  audit(newUserId, 'REGISTER_HOST', 'USER', newUserId, `New host registered: ${name}`);
+
+  const token = jwt.sign({ id: newUserId, username, name, role: 'HOST', department: department || 'General', email: cleanEmail }, secret, { expiresIn: '8h' });
+  res.status(201).json({
+    message: 'Host account registered successfully!',
+    token,
+    user: { id: newUserId, username, name, role: 'HOST', department: department || 'General', email: cleanEmail }
+  });
+});
+
 app.post('/api/auth/login', (req, res) => {
-  const u = db.prepare('SELECT * FROM users WHERE username=?').get(req.body.username);
+  const u = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(req.body.username, req.body.username);
   if (!u || !bcrypt.compareSync(req.body.password, u.password)) return res.status(401).json({ message: 'Invalid credentials' });
+  if (u.active === 0) return res.status(403).json({ message: 'Account disabled. Contact system administrator.' });
+
+  db.prepare('UPDATE users SET last_login=CURRENT_TIMESTAMP WHERE id=?').run(u.id);
+
   const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email }, secret, { expiresIn: '8h' });
   res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email } });
 });
 
-// Notifications API
+// Notifications API (Scoped to User)
 app.get('/api/notifications', auth, (req, res) => {
   const rows = db.prepare('SELECT * FROM notifications WHERE user_id IS NULL OR user_id=? ORDER BY id DESC LIMIT 50').all(req.user.id);
   const unreadCount = db.prepare('SELECT COUNT(*) c FROM notifications WHERE (user_id IS NULL OR user_id=?) AND read=0').get(req.user.id).c;
@@ -240,7 +336,6 @@ app.put('/api/notifications/read-all', auth, (req, res) => {
 // SMTP Admin Settings Endpoints
 app.get('/api/admin/smtp-settings', auth, roles('ADMIN'), (req, res) => {
   const config = getSmtpConfig();
-  // Hide password in response for security
   res.json({ ...config, pass: config.pass ? '********' : '' });
 });
 
@@ -275,8 +370,20 @@ app.post('/api/admin/test-email', auth, roles('ADMIN'), async (req, res) => {
   }
 });
 
-app.get('/api/users', auth, roles('ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email FROM users ORDER BY name').all()));
-app.get('/api/hosts', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email FROM users WHERE active=1 ORDER BY name').all()));
+// Public Endpoint for Visitor Registration Dropdown (Hosts list)
+app.get('/api/public/hosts', (req, res) => {
+  res.json(db.prepare("SELECT id,name,department,email FROM users WHERE (role='HOST' OR role='EMPLOYEE') AND active=1 ORDER BY name").all());
+});
+app.get('/api/public/departments', (req, res) => {
+  res.json(db.prepare("SELECT id,name,code FROM departments WHERE active=1 ORDER BY name").all());
+});
+app.get('/api/public/purposes', (req, res) => {
+  res.json(db.prepare("SELECT id,name FROM purposes WHERE active=1 ORDER BY name").all());
+});
+
+// User Management (Admin / Super Admin / Reception)
+app.get('/api/users', auth, roles('ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email,phone,active FROM users ORDER BY name').all()));
+app.get('/api/hosts', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'CEO'), (req, res) => res.json(db.prepare("SELECT id,name,username,role,department,email FROM users WHERE (role='HOST' OR role='EMPLOYEE') AND active=1 ORDER BY name").all()));
 app.get('/api/master/departments', auth, (req, res) => res.json(db.prepare('SELECT id,name,code,description,color FROM departments WHERE active=1 ORDER BY name').all()));
 app.get('/api/master/purposes', auth, (req, res) => res.json(db.prepare('SELECT id,name,description,color FROM purposes WHERE active=1 ORDER BY name').all()));
 app.get('/api/master/departments/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,code,description,color,active FROM departments ORDER BY name').all()));
@@ -328,8 +435,8 @@ app.delete('/api/master/purposes/:id', auth, roles('ADMIN'), (req, res) => {
   res.json({ message: 'Purpose removed' });
 });
 
-app.get('/api/master/hosts', auth, (req, res) => res.json(db.prepare("SELECT id,name,department,email,active FROM users WHERE role='HOST' AND active=1 ORDER BY name").all()));
-app.get('/api/master/hosts/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare("SELECT id,name,username,department,email,active FROM users WHERE role='HOST' ORDER BY name").all()));
+app.get('/api/master/hosts', auth, roles('ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare("SELECT id,name,department,email,active FROM users WHERE (role='HOST' OR role='EMPLOYEE') AND active=1 ORDER BY name").all()));
+app.get('/api/master/hosts/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare("SELECT id,name,username,department,email,active FROM users WHERE (role='HOST' OR role='EMPLOYEE') ORDER BY name").all()));
 
 app.post('/api/master/hosts', auth, roles('ADMIN'), (req, res) => {
   const { name, department, email, active } = req.body;
@@ -340,7 +447,7 @@ app.post('/api/master/hosts', auth, roles('ADMIN'), (req, res) => {
 });
 
 app.put('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
-  const d = db.prepare("SELECT id FROM users WHERE id=? AND role='HOST'").get(req.params.id);
+  const d = db.prepare("SELECT id FROM users WHERE id=? AND (role='HOST' OR role='EMPLOYEE')").get(req.params.id);
   if (!d) return res.status(404).json({ message: 'Host not found' });
   db.prepare('UPDATE users SET name=?,department=?,email=?,active=? WHERE id=?').run(req.body.name, req.body.department || null, req.body.email || null, req.body.active !== undefined ? (req.body.active ? 1 : 0) : 1, req.params.id);
   audit(req.user.id, 'UPDATE', 'HOST', req.params.id, req.body.name);
@@ -348,16 +455,24 @@ app.put('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
 });
 
 app.delete('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
-  db.prepare("UPDATE users SET active=0 WHERE id=? AND role='HOST'").run(req.params.id);
+  db.prepare("UPDATE users SET active=0 WHERE id=? AND (role='HOST' OR role='EMPLOYEE')").run(req.params.id);
   audit(req.user.id, 'DELETE', 'HOST', req.params.id);
   res.json({ message: 'Host removed' });
 });
 
-app.get('/api/dashboard', auth, (req, res) => res.json(dashboard()));
+app.get('/api/dashboard', auth, (req, res) => res.json(dashboard(req.user)));
 
+// Scoped Visitor Listing
 app.get('/api/visitors', auth, (req, res) => {
-  let sql = `SELECT v.*,x.id visit_id,x.visitor_code,x.entry_time,x.exit_time,x.status,x.valid_until,x.expected_checkin,x.expected_checkout,u.name host_name,u.email host_email FROM visitors v JOIN visits x ON x.visitor_id=v.id LEFT JOIN users u ON u.id=v.host_id WHERE 1=1`;
+  let sql = `SELECT v.*,x.id visit_id,x.visitor_code,x.entry_time,x.exit_time,x.status,x.valid_until,x.expected_checkin,x.expected_checkout,x.initiator_type,x.expected_arrival_time,x.proposed_arrival_time,x.rejection_reason,x.pass_token,u.name host_name,u.email host_email FROM visitors v JOIN visits x ON x.visitor_id=v.id LEFT JOIN users u ON u.id=v.host_id WHERE 1=1`;
   const p = [];
+
+  // Scoping for standard HOST users
+  if (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') {
+    sql += ' AND (v.host_id=? OR x.created_by=?)';
+    p.push(req.user.id, req.user.id);
+  }
+
   for (const k of ['name', 'mobile', 'company', 'department']) if (req.query[k]) {
     sql += ` AND v.${k} LIKE ?`;
     p.push('%' + req.query[k] + '%');
@@ -370,265 +485,312 @@ app.get('/api/visitors', auth, (req, res) => {
   res.json(db.prepare(sql).all(...p));
 });
 
-// Visitor Registration Endpoint
-app.post('/api/visitors/register', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), async (req, res) => {
-  const { name, mobile, email, company, purpose, host_id, department, vehicle, consent = true, expected_checkin, expected_checkout } = req.body;
-  if (!name || !mobile || !purpose || !host_id || !consent) return res.status(400).json({ message: 'Name, mobile, purpose, host and consent are required' });
-  if (!/^\d{10}$/.test(String(mobile).trim())) return res.status(400).json({ message: 'Mobile number must be exactly 10 digits' });
-  if (!expected_checkin || !expected_checkout) return res.status(400).json({ message: 'Expected check-in and check-out time are required' });
-  if (new Date(expected_checkout) <= new Date(expected_checkin)) return res.status(400).json({ message: 'Check-out time must be later than check-in time' });
-
-  const cleanMobile = String(mobile).trim();
-
-  // Check for duplicate rapid submission (within 15 seconds)
-  const recent = db.prepare(`SELECT x.id visitId, x.visitor_code visitorCode, v.id, v.otp 
-    FROM visitors v JOIN visits x ON x.visitor_id=v.id 
-    WHERE v.mobile=? AND v.name=? AND datetime(x.created_at) >= datetime('now', '-15 seconds') 
-    ORDER BY x.id DESC LIMIT 1`).get(cleanMobile, name);
-  if (recent) {
-    return res.json({ message: 'Visitor registered successfully! Demo OTP and Pass Code generated.', ...recent, otpDemo: true });
+// Flow A: Public Self-Registration Endpoint (Visitor Initiated)
+app.post('/api/public/register-visit', async (req, res) => {
+  const { name, mobile, email, company, purpose, host_id, department, vehicle, expected_arrival_time } = req.body;
+  if (!name || !mobile || !purpose || !host_id || !expected_arrival_time) {
+    return res.status(400).json({ message: 'Name, mobile, purpose, host and expected arrival time are required' });
+  }
+  if (!/^\d{10}$/.test(String(mobile).trim())) {
+    return res.status(400).json({ message: 'Mobile number must be exactly 10 digits' });
   }
 
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const cleanMobile = String(mobile).trim();
+  const code = 'VAMS-' + Date.now().toString(36).toUpperCase();
+  const passToken = 'TOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+  const validUntil = new Date(new Date(expected_arrival_time).getTime() + 8 * 3600000).toISOString();
+
   const tx = db.transaction(() => {
-    const r = db.prepare('INSERT INTO visitors(name,mobile,email,company,purpose,host_id,department,vehicle,consent,otp) VALUES(?,?,?,?,?,?,?,?,?,?)').run(name, cleanMobile, email || '', company || '', purpose, host_id, department || '', vehicle || '', consent ? 1 : 0, otp);
-    const code = 'VAMS-' + Date.now().toString(36).toUpperCase();
-    const valid = new Date(expected_checkout).toISOString();
-    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout) VALUES(?,?,?,?,?,?)').run(r.lastInsertRowid, code, 'PENDING_APPROVAL', valid, expected_checkin, expected_checkout);
-    db.prepare('INSERT INTO approvals(visit_id,host_id) VALUES(?,?)').run(vr.lastInsertRowid, host_id);
-    audit(req.user.id, 'REGISTER', 'VISITOR', r.lastInsertRowid, code);
-    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, otp };
+    const r = db.prepare('INSERT INTO visitors(name,mobile,email,company,purpose,host_id,department,vehicle,consent) VALUES(?,?,?,?,?,?,?,?,1)').run(name, cleanMobile, email || '', company || '', purpose, host_id, department || '', vehicle || '');
+    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,initiator_type,expected_arrival_time,pass_token) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(r.lastInsertRowid, code, 'PENDING_HOST_REVIEW', validUntil, expected_arrival_time, validUntil, 'SELF_REGISTERED', expected_arrival_time, passToken);
+    db.prepare('INSERT INTO approvals(visit_id,host_id,status) VALUES(?,?,?)').run(vr.lastInsertRowid, host_id, 'PENDING');
+    logPassStateChange(vr.lastInsertRowid, null, 'PENDING_HOST_REVIEW', null, 'VISITOR', 'Self-registered by visitor');
+    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, passToken };
   });
 
   const out = tx();
-  console.log(`[VAMS DEMO OTP] ${cleanMobile}: ${out.otp}`);
-
-  // Fetch host details for notification & email
   const hostUser = db.prepare('SELECT * FROM users WHERE id=?').get(host_id);
-  const hostName = hostUser ? hostUser.name : 'Host';
 
-  // Create App-level Notification for Host and Reception
+  // In-App Notification to Host
   createNotification({
     user_id: host_id,
     type: 'VISITOR_REGISTERED',
-    title: 'New Visitor Registered',
-    message: `${name} (${company || 'Individual'}) registered to visit ${hostName} for "${purpose}".`,
+    title: '🔔 New Visitor Self-Registered',
+    message: `${name} (${company || 'Individual'}) requested a visit for ${new Date(expected_arrival_time).toLocaleString()}.`,
     link_id: out.visitId
   });
 
-  // Notify Host via email if host email exists
+  // Host Email Notification
   if (hostUser && hostUser.email) {
     sendEmail({
       to: hostUser.email,
-      subject: `[OpsVision VAMS] Visitor Registration Pending Approval: ${name}`,
+      subject: `[OpsVision VAMS] Pre-Approval Request: ${name} is visiting you`,
       html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f1f5f9; color: #1e293b;">
-        <div style="max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
-          <h2 style="color: #2563eb; margin-top: 0;">Visitor Registration Request</h2>
+        <div style="max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 24px;">
+          <h2 style="color: #2563eb; margin-top: 0;">Visitor Pre-Approval Request</h2>
           <p>Hello <strong>${hostUser.name}</strong>,</p>
-          <p>A new visitor has registered to meet you at the facility:</p>
+          <p>A visitor has self-registered to meet you:</p>
           <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
             <tr><td style="padding: 6px; font-weight: bold;">Visitor Name:</td><td style="padding: 6px;">${name}</td></tr>
             <tr><td style="padding: 6px; font-weight: bold;">Company:</td><td style="padding: 6px;">${company || 'N/A'}</td></tr>
             <tr><td style="padding: 6px; font-weight: bold;">Purpose:</td><td style="padding: 6px;">${purpose}</td></tr>
-            <tr><td style="padding: 6px; font-weight: bold;">Visitor Code:</td><td style="padding: 6px; color: #2563eb; font-weight: bold;">${out.visitorCode}</td></tr>
+            <tr><td style="padding: 6px; font-weight: bold;">Expected Arrival:</td><td style="padding: 6px; color: #2563eb; font-weight: bold;">${new Date(expected_arrival_time).toLocaleString()}</td></tr>
           </table>
-          <p>Please log in to the OpsVision VAMS dashboard to review and approve/reject this visit request.</p>
+          <p>Please log in to your OpsVision VAMS Host Dashboard to Single-Tap Approve, Propose New Time, or Reject this visit.</p>
         </div>
       </div>`
     });
   }
 
-  res.status(201).json({ message: 'Visitor registered. OTP generated.', ...out, otpDemo: true });
+  res.status(201).json({ message: 'Registration submitted. Awaiting host review.', ...out });
 });
 
-app.post('/api/visitors/:id/verify-otp', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
-  const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
-  if (!v) return res.status(404).json({ message: 'Visitor not found' });
-  if (req.body.otp !== v.otp && req.body.otp !== '123456') return res.status(400).json({ message: 'Invalid OTP' });
-  db.prepare('UPDATE visitors SET otp_verified=1 WHERE id=?').run(v.id);
-  audit(req.user.id, 'VERIFY_OTP', 'VISITOR', v.id);
-  res.json({ message: 'OTP verified' });
-});
+// Flow B: Staff Guest Pass Pre-Creation Endpoint (Staff/Host Initiated)
+app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION', 'HOST', 'EMPLOYEE'), async (req, res) => {
+  const { name, mobile, email, company, purpose, host_id, department, vehicle, expected_arrival_time } = req.body;
+  if (!name || !mobile || !purpose || !host_id || !expected_arrival_time) {
+    return res.status(400).json({ message: 'Name, mobile, purpose, host and expected arrival time are required' });
+  }
 
-app.post('/api/visitors/:id/photo', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
-  db.prepare('UPDATE visitors SET photo=? WHERE id=?').run(req.body.photo || '', req.params.id);
-  audit(req.user.id, 'CAPTURE_PHOTO', 'VISITOR', req.params.id);
-  res.json({ message: 'Photo saved' });
-});
+  const cleanMobile = String(mobile).trim();
+  const code = 'VAMS-' + Date.now().toString(36).toUpperCase();
+  const passToken = 'TOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+  const validUntil = new Date(new Date(expected_arrival_time).getTime() + 8 * 3600000).toISOString();
 
-app.put('/api/visitors/:id', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
-  const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
-  if (!v) return res.status(404).json({ message: 'Visitor not found' });
-  const { name, mobile, email, company, purpose, host_id, department, vehicle, expected_checkin, expected_checkout } = req.body;
-  if (!name || !mobile || !purpose || !host_id) return res.status(400).json({ message: 'Name, mobile, purpose and host are required' });
-  if (!/^\d{10}$/.test(String(mobile).trim())) return res.status(400).json({ message: 'Mobile number must be exactly 10 digits' });
-  if (!expected_checkin || !expected_checkout) return res.status(400).json({ message: 'Expected check-in and check-out time are required' });
-  if (new Date(expected_checkout) <= new Date(expected_checkin)) return res.status(400).json({ message: 'Check-out time must be later than check-in time' });
-  const valid = new Date(expected_checkout).toISOString();
+  // If host themselves created the pass, it's auto approved!
+  const isCreatedBySelf = (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && req.user.id === Number(host_id);
+  const initialStatus = isCreatedBySelf ? 'APPROVED' : 'PENDING_HOST_REVIEW';
+
   const tx = db.transaction(() => {
-    db.prepare('UPDATE visitors SET name=?,mobile=?,email=?,company=?,purpose=?,host_id=?,department=?,vehicle=? WHERE id=?').run(name, String(mobile).trim(), email || '', company || '', purpose, host_id, department || '', vehicle || '', v.id);
-    db.prepare('UPDATE visits SET expected_checkin=?,expected_checkout=?,valid_until=? WHERE visitor_id=?').run(expected_checkin, expected_checkout, valid, v.id);
-    audit(req.user.id, 'UPDATE', 'VISITOR', v.id, name);
+    const r = db.prepare('INSERT INTO visitors(name,mobile,email,company,purpose,host_id,department,vehicle,consent) VALUES(?,?,?,?,?,?,?,?,1)').run(name, cleanMobile, email || '', company || '', purpose, host_id, department || '', vehicle || '');
+    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,initiator_type,expected_arrival_time,created_by,approved_by,pass_token) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+      .run(r.lastInsertRowid, code, initialStatus, validUntil, expected_arrival_time, validUntil, 'STAFF_CREATED', expected_arrival_time, req.user.id, isCreatedBySelf ? req.user.id : null, passToken);
+    db.prepare('INSERT INTO approvals(visit_id,host_id,status) VALUES(?,?,?)').run(vr.lastInsertRowid, host_id, isCreatedBySelf ? 'APPROVED' : 'PENDING');
+    logPassStateChange(vr.lastInsertRowid, null, initialStatus, req.user.id, req.user.role, isCreatedBySelf ? 'Host pre-approved guest pass' : `Guest pass created by ${req.user.name} (${req.user.role})`);
+    audit(req.user.id, 'PRE_CREATE_PASS', 'VISIT', vr.lastInsertRowid, code);
+    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, passToken, status: initialStatus };
   });
-  tx();
-  res.json({ message: 'Visitor updated' });
+
+  const out = tx();
+  const hostUser = db.prepare('SELECT * FROM users WHERE id=?').get(host_id);
+
+  if (!isCreatedBySelf) {
+    // Alert host that staff created a pass on their behalf
+    createNotification({
+      user_id: host_id,
+      type: 'STAFF_PASS_CREATED',
+      title: '🎟️ Guest Pass Created on Your Behalf',
+      message: `${req.user.name} created a pass for ${name} visiting you at ${new Date(expected_arrival_time).toLocaleString()}.`,
+      link_id: out.visitId
+    });
+  }
+
+  res.status(201).json({ message: isCreatedBySelf ? 'Guest pass pre-approved!' : 'Guest pass created. Awaiting host confirmation.', ...out });
 });
 
-app.delete('/api/visitors/:id', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
-  const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
-  if (!v) return res.status(404).json({ message: 'Visitor not found' });
-  const tx = db.transaction(() => {
-    const visits = db.prepare('SELECT id FROM visits WHERE visitor_id=?').all(v.id);
-    for (const x of visits) {
-      db.prepare('DELETE FROM approvals WHERE visit_id=?').run(x.id);
-      db.prepare('DELETE FROM audit_logs WHERE entity=? AND entity_id=?').run('VISIT', x.id);
+// Host Approval / Propose-Time / Reject Endpoint
+app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN', 'SUPER_ADMIN', 'RECEPTION'), async (req, res) => {
+  const visit = db.prepare('SELECT x.*, v.name visitor_name, v.email visitor_email, v.mobile visitor_mobile, v.host_id, u.name host_name FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?').get(req.params.id);
+  if (!visit) return res.status(404).json({ message: 'Visit not found' });
+
+  // Host user scoping check
+  if ((req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && visit.host_id !== req.user.id) {
+    return res.status(403).json({ message: 'You can only act on visitor passes assigned to you' });
+  }
+
+  const { action, proposed_time, notes } = req.body;
+  if (!['APPROVE', 'PROPOSE_TIME', 'REJECT'].includes(action)) {
+    return res.status(400).json({ message: 'Invalid action. Must be APPROVE, PROPOSE_TIME, or REJECT' });
+  }
+
+  let newStatus = '';
+  if (action === 'APPROVE') {
+    newStatus = 'APPROVED';
+    db.prepare('UPDATE visits SET status=?, approved_by=? WHERE id=?').run(newStatus, req.user.id, visit.id);
+    db.prepare("UPDATE approvals SET status='APPROVED', action_time=CURRENT_TIMESTAMP, notes=? WHERE visit_id=?").run(notes || 'Approved by host', visit.id);
+    logPassStateChange(visit.id, visit.status, newStatus, req.user.id, req.user.role, notes || 'Approved');
+    audit(req.user.id, 'APPROVE_VISIT', 'VISIT', visit.id);
+
+    // Notify Reception
+    createNotification({
+      user_id: null,
+      type: 'VISIT_APPROVED',
+      title: '✅ Visitor Pass Approved',
+      message: `${visit.visitor_name} has been approved by host ${visit.host_name}.`,
+      link_id: visit.id
+    });
+
+    // Notify Visitor via email
+    if (visit.visitor_email) {
+      sendEmail({
+        to: visit.visitor_email,
+        subject: `[OpsVision VAMS] Your Visitor Pass is Approved! Code: ${visit.visitor_code}`,
+        html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #ecfdf5; border-radius: 8px;">
+          <h2 style="color: #059669;">Visitor Pass Approved!</h2>
+          <p>Dear <strong>${visit.visitor_name}</strong>,</p>
+          <p>Your host <strong>${visit.host_name}</strong> has approved your visit.</p>
+          <p>Your Visitor Pass Code is: <strong style="font-size: 18px; color: #2563eb;">${visit.visitor_code}</strong></p>
+          <p>Expected Arrival: ${new Date(visit.expected_arrival_time || visit.expected_checkin).toLocaleString()}</p>
+          <p>Please present this code at reception upon arrival.</p>
+        </div>`
+      });
     }
-    db.prepare('DELETE FROM visits WHERE visitor_id=?').run(v.id);
-    db.prepare('DELETE FROM audit_logs WHERE entity=? AND entity_id=?').run('VISITOR', v.id);
-    db.prepare('DELETE FROM visitors WHERE id=?').run(v.id);
-    audit(req.user.id, 'DELETE', 'VISITOR', v.id, v.name);
-  });
-  tx();
-  res.json({ message: 'Visitor deleted' });
+
+    return res.json({ message: 'Visit approved successfully' });
+  } else if (action === 'PROPOSE_TIME') {
+    if (!proposed_time) return res.status(400).json({ message: 'Proposed time is required' });
+    newStatus = 'PENDING_VISITOR_CONFIRMATION';
+    db.prepare('UPDATE visits SET status=?, proposed_arrival_time=? WHERE id=?').run(newStatus, proposed_time, visit.id);
+    db.prepare("UPDATE approvals SET status='PENDING', action_time=CURRENT_TIMESTAMP, notes=? WHERE visit_id=?").run(`Counter time proposed: ${proposed_time}`, visit.id);
+    logPassStateChange(visit.id, visit.status, newStatus, req.user.id, req.user.role, `Proposed counter time: ${proposed_time}`);
+    audit(req.user.id, 'PROPOSE_TIME_VISIT', 'VISIT', visit.id, proposed_time);
+
+    // Send email / notification to visitor for counter confirmation
+    if (visit.visitor_email) {
+      const confirmUrl = `${req.headers.origin || 'http://localhost:5173'}?confirmToken=${visit.pass_token}`;
+      sendEmail({
+        to: visit.visitor_email,
+        subject: `[OpsVision VAMS] Host Proposed New Visit Time: ${visit.visitor_name}`,
+        html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #fffbeb; border-radius: 8px;">
+          <h2 style="color: #d97706;">Reschedule Proposal from Host</h2>
+          <p>Dear <strong>${visit.visitor_name}</strong>,</p>
+          <p>Your host <strong>${visit.host_name}</strong> proposed a new arrival time for your visit:</p>
+          <p style="font-size: 16px; font-weight: bold; color: #b45309;">New Proposed Arrival: ${new Date(proposed_time).toLocaleString()}</p>
+          <p>Please confirm if this time works for you:</p>
+          <p><a href="${confirmUrl}" style="background-color: #2563eb; color: white; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Review & Confirm Reschedule</a></p>
+        </div>`
+      });
+    }
+
+    return res.json({ message: 'Counter time proposal sent to visitor', proposed_time });
+  } else if (action === 'REJECT') {
+    if (!notes || !notes.trim()) return res.status(400).json({ message: 'Rejection reason is required' });
+    newStatus = 'REJECTED';
+    db.prepare('UPDATE visits SET status=?, rejection_reason=?, approved_by=? WHERE id=?').run(newStatus, notes.trim(), req.user.id, visit.id);
+    db.prepare("UPDATE approvals SET status='REJECTED', action_time=CURRENT_TIMESTAMP, notes=? WHERE visit_id=?").run(notes.trim(), visit.id);
+    logPassStateChange(visit.id, visit.status, newStatus, req.user.id, req.user.role, notes.trim());
+    audit(req.user.id, 'REJECT_VISIT', 'VISIT', visit.id, notes.trim());
+
+    // Notify Reception
+    createNotification({
+      user_id: null,
+      type: 'VISIT_REJECTED',
+      title: '❌ Visit Request Rejected',
+      message: `${visit.visitor_name} was rejected by host ${visit.host_name}. Reason: ${notes}`,
+      link_id: visit.id
+    });
+
+    return res.json({ message: 'Visit rejected' });
+  }
 });
 
-app.get('/api/approvals', auth, roles('EMPLOYEE', 'RECEPTION', 'ADMIN'), (req, res) => {
-  const mine = req.user.role === 'EMPLOYEE' ? ' AND a.host_id=' + Number(req.user.id) : '';
-  res.json(db.prepare(`SELECT a.*,x.visitor_code,x.status visit_status,v.name visitor_name,v.company,v.purpose,v.mobile,u.name host_name FROM approvals a JOIN visits x ON x.id=a.visit_id JOIN visitors v ON v.id=x.visitor_id JOIN users u ON u.id=a.host_id WHERE 1=1 ${mine} ORDER BY a.id DESC`).all());
+// Legacy Approval Compatibility Router
+app.get('/api/approvals', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO'), (req, res) => {
+  let mine = '';
+  if (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') {
+    mine = ' AND a.host_id=' + Number(req.user.id);
+  }
+  res.json(db.prepare(`SELECT a.*,x.visitor_code,x.status visit_status,x.expected_arrival_time,x.proposed_arrival_time,x.rejection_reason,x.initiator_type,v.name visitor_name,v.company,v.purpose,v.mobile,u.name host_name FROM approvals a JOIN visits x ON x.id=a.visit_id JOIN visitors v ON v.id=x.visitor_id JOIN users u ON u.id=a.host_id WHERE 1=1 ${mine} ORDER BY a.id DESC`).all());
 });
 
-app.post('/api/approvals/:visitId', auth, roles('EMPLOYEE', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.post('/api/approvals/:visitId', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN'), (req, res) => {
   const visit = db.prepare('SELECT * FROM visits WHERE id=?').get(req.params.visitId);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
   const approval = db.prepare('SELECT * FROM approvals WHERE visit_id=?').get(visit.id);
-  if (req.user.role === 'EMPLOYEE' && approval.host_id !== req.user.id) return res.status(403).json({ message: 'Not your approval' });
-  const status = req.body.action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-  db.prepare('UPDATE approvals SET status=?,action_time=CURRENT_TIMESTAMP,notes=? WHERE visit_id=?').run(status, req.body.notes || '', visit.id);
-  db.prepare('UPDATE visits SET status=? WHERE id=?').run(status, visit.id);
-  audit(req.user.id, status, 'VISIT', visit.id);
-
-  // App notification for Approval
-  const visitor = db.prepare('SELECT * FROM visitors WHERE id=?').get(visit.visitor_id);
-  if (visitor) {
-    createNotification({
-      user_id: null, // Broadcast to Security & Reception
-      type: status === 'APPROVED' ? 'VISIT_APPROVED' : 'VISIT_REJECTED',
-      title: `Visit ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
-      message: `Visitor ${visitor.name} (${visit.visitor_code}) has been ${status.toLowerCase()} by host.`,
-      link_id: visit.id
-    });
+  if ((req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && approval.host_id !== req.user.id) {
+    return res.status(403).json({ message: 'Not your approval' });
   }
-
+  const status = req.body.action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  const notes = req.body.notes || (status === 'REJECTED' ? 'Rejected by host' : 'Approved');
+  db.prepare('UPDATE approvals SET status=?,action_time=CURRENT_TIMESTAMP,notes=? WHERE visit_id=?').run(status, notes, visit.id);
+  db.prepare('UPDATE visits SET status=?, approved_by=? WHERE id=?').run(status, req.user.id, visit.id);
+  logPassStateChange(visit.id, visit.status, status, req.user.id, req.user.role, notes);
+  audit(req.user.id, status, 'VISIT', visit.id);
   res.json({ message: `Visit ${status.toLowerCase()}` });
 });
 
-// Visitor Entry Endpoint (Trigger for Email Acknowledgement to Visitor & Host)
-app.post('/api/visits/:id/entry', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), async (req, res) => {
+// Visitor Confirmation API for Counter-Proposed Times (Public)
+app.get('/api/public/pass-confirm/:passToken', (req, res) => {
+  const r = db.prepare(`SELECT x.*, v.name visitor_name, v.company, v.purpose, v.mobile, u.name host_name, u.department host_department FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.pass_token=?`).get(req.params.passToken);
+  if (!r) return res.status(404).json({ message: 'Pass token not found or invalid' });
+  res.json(r);
+});
+
+app.post('/api/public/pass-confirm/:passToken', (req, res) => {
+  const visit = db.prepare('SELECT * FROM visits WHERE pass_token=?').get(req.params.passToken);
+  if (!visit) return res.status(404).json({ message: 'Pass token not found or invalid' });
+
+  const { action } = req.body; // 'ACCEPT' or 'DECLINE'
+  if (action === 'ACCEPT') {
+    if (!visit.proposed_arrival_time) return res.status(400).json({ message: 'No proposed counter time found' });
+    db.prepare("UPDATE visits SET status='APPROVED', expected_arrival_time=?, proposed_arrival_time=NULL WHERE id=?").run(visit.proposed_arrival_time, visit.id);
+    db.prepare("UPDATE approvals SET status='APPROVED', action_time=CURRENT_TIMESTAMP, notes='Visitor accepted proposed time' WHERE visit_id=?").run(visit.id);
+    logPassStateChange(visit.id, visit.status, 'APPROVED', null, 'VISITOR', 'Visitor accepted rescheduled time');
+    createNotification({
+      user_id: visit.host_id,
+      type: 'RESCHEDULE_ACCEPTED',
+      title: '🎉 Reschedule Accepted by Visitor',
+      message: `Visitor accepted proposed arrival time (${new Date(visit.proposed_arrival_time).toLocaleString()}). Pass is now APPROVED.`,
+      link_id: visit.id
+    });
+    return res.json({ message: 'Rescheduled time accepted. Pass approved!' });
+  } else if (action === 'DECLINE') {
+    db.prepare("UPDATE visits SET status='REJECTED', rejection_reason='Visitor declined proposed time' WHERE id=?").run(visit.id);
+    db.prepare("UPDATE approvals SET status='REJECTED', action_time=CURRENT_TIMESTAMP, notes='Visitor declined proposed time' WHERE visit_id=?").run(visit.id);
+    logPassStateChange(visit.id, visit.status, 'REJECTED', null, 'VISITOR', 'Visitor declined proposed time');
+    createNotification({
+      user_id: visit.host_id,
+      type: 'RESCHEDULE_DECLINED',
+      title: '❌ Reschedule Declined by Visitor',
+      message: `Visitor declined proposed arrival time. Visit marked as rejected.`,
+      link_id: visit.id
+    });
+    return res.json({ message: 'Rescheduled time declined. Visit cancelled.' });
+  } else {
+    return res.status(400).json({ message: 'Action must be ACCEPT or DECLINE' });
+  }
+});
+
+// Visitor Entry Endpoint (Gate Check-In)
+app.post('/api/visits/:id/entry', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
   const visit = db.prepare('SELECT x.*, v.name visitor_name, v.email visitor_email, v.company visitor_company, v.purpose visitor_purpose, v.mobile visitor_mobile, v.host_id, u.name host_name, u.email host_email, u.department host_department FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?').get(req.params.id);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
-  if (visit.status !== 'APPROVED') return res.status(400).json({ message: 'Visit is not approved' });
+  if (visit.status !== 'APPROVED') return res.status(400).json({ message: `Cannot check in. Visit status is ${visit.status}` });
 
   const entryTimeStr = new Date().toLocaleString();
-  db.prepare("UPDATE visits SET status='INSIDE',entry_time=CURRENT_TIMESTAMP,entry_guard_id=? WHERE id=?").run(req.user.id, visit.id);
+  db.prepare("UPDATE visits SET status='CHECKED_IN',entry_time=CURRENT_TIMESTAMP,entry_guard_id=? WHERE id=?").run(req.user.id, visit.id);
+  logPassStateChange(visit.id, visit.status, 'CHECKED_IN', req.user.id, req.user.role, 'Gate Check-in');
   audit(req.user.id, 'ENTRY', 'VISIT', visit.id);
 
-  // 1. Create WebApp Realtime Alert Notification for Host & Security
+  // Realtime Alert Notification to Host
   createNotification({
     user_id: visit.host_id,
     type: 'VISITOR_ENTRY',
-    title: '🔔 Visitor Entered Facility',
-    message: `Your visitor ${visit.visitor_name} (${visit.visitor_company || 'Individual'}) has checked in and entered the facility at ${entryTimeStr}.`,
+    title: '🔔 Visitor Checked In at Gate',
+    message: `Your visitor ${visit.visitor_name} (${visit.visitor_company || 'Individual'}) has arrived and checked in at ${entryTimeStr}.`,
     link_id: visit.id
   });
 
-  // Global alert for Reception/Admin
-  createNotification({
-    user_id: null,
-    type: 'VISITOR_ENTRY',
-    title: 'Visitor Entry Recorded',
-    message: `${visit.visitor_name} checked in to visit ${visit.host_name} (${visit.host_department || 'General'}).`,
-    link_id: visit.id
-  });
-
-  // 2. Dispatch Email Acknowledgement to Visitor
-  if (visit.visitor_email) {
-    sendEmail({
-      to: visit.visitor_email,
-      subject: `[OpsVision VAMS] Facility Check-in Acknowledgement - Pass #${visit.visitor_code}`,
-      html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0;">
-        <div style="background-color: #1e3a8a; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
-          <h1 style="margin: 0; font-size: 24px;">OpsVision VAMS</h1>
-          <p style="margin: 4px 0 0 0; opacity: 0.9;">Visitor Entry Acknowledgement</p>
-        </div>
-        <div style="background-color: white; padding: 24px; border-radius: 0 0 8px 8px;">
-          <p style="font-size: 16px;">Dear <strong>${visit.visitor_name}</strong>,</p>
-          <p>Welcome! Your entry to the facility has been recorded successfully.</p>
-          
-          <div style="background-color: #f1f5f9; padding: 16px; border-radius: 8px; margin: 20px 0;">
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr style="border-bottom: 1px solid #cbd5e1;"><td style="padding: 8px 0; font-weight: bold; color: #475569;">Visitor Code:</td><td style="padding: 8px 0; font-weight: bold; color: #2563eb;">${visit.visitor_code}</td></tr>
-              <tr style="border-bottom: 1px solid #cbd5e1;"><td style="padding: 8px 0; font-weight: bold; color: #475569;">Entry Time:</td><td style="padding: 8px 0;">${entryTimeStr}</td></tr>
-              <tr style="border-bottom: 1px solid #cbd5e1;"><td style="padding: 8px 0; font-weight: bold; color: #475569;">Person to Visit (Host):</td><td style="padding: 8px 0;">${visit.host_name}</td></tr>
-              <tr style="border-bottom: 1px solid #cbd5e1;"><td style="padding: 8px 0; font-weight: bold; color: #475569;">Department:</td><td style="padding: 8px 0;">${visit.host_department || 'N/A'}</td></tr>
-              <tr><td style="padding: 8px 0; font-weight: bold; color: #475569;">Purpose:</td><td style="padding: 8px 0;">${visit.visitor_purpose}</td></tr>
-            </table>
-          </div>
-
-          <p style="color: #64748b; font-size: 14px;">Please keep your digital visitor badge active and wear your visitor pass at all times while inside the premises. Remember to check out at security before leaving.</p>
-          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
-          <p style="text-align: center; color: #94a3b8; font-size: 12px; margin: 0;">OpsVision Visitor Management System &bull; Hostinger VPS Secured</p>
-        </div>
-      </div>`
-    });
-  }
-
-  // 3. Dispatch Email Alert to Host
-  if (visit.host_email) {
-    sendEmail({
-      to: visit.host_email,
-      subject: `[OpsVision VAMS] Arrival Alert: ${visit.visitor_name} has entered`,
-      html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0;">
-        <div style="background-color: #059669; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
-          <h2 style="margin: 0;">Visitor Arrival Notification</h2>
-        </div>
-        <div style="background-color: white; padding: 24px; border-radius: 0 0 8px 8px;">
-          <p style="font-size: 16px;">Hello <strong>${visit.host_name}</strong>,</p>
-          <p>Your visitor has checked in at reception and entered the facility premises.</p>
-          
-          <div style="background-color: #ecfdf5; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0; border-radius: 4px;">
-            <p style="margin: 4px 0;"><strong>Visitor:</strong> ${visit.visitor_name}</p>
-            <p style="margin: 4px 0;"><strong>Company:</strong> ${visit.visitor_company || 'Individual'}</p>
-            <p style="margin: 4px 0;"><strong>Contact Mobile:</strong> ${visit.visitor_mobile}</p>
-            <p style="margin: 4px 0;"><strong>Purpose:</strong> ${visit.visitor_purpose}</p>
-            <p style="margin: 4px 0;"><strong>Check-in Time:</strong> ${entryTimeStr}</p>
-          </div>
-
-          <p style="color: #475569;">Please receive your visitor at reception or your designated department meeting room.</p>
-        </div>
-      </div>`
-    });
-  }
-
-  res.json({ message: 'Entry recorded. Notifications & email acknowledgements dispatched.' });
+  res.json({ message: 'Check-in recorded. Host notified.' });
 });
 
-app.post('/api/visits/:id/exit', auth, roles('GUARD', 'RECEPTION', 'ADMIN'), (req, res) => {
+app.post('/api/visits/:id/exit', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN'), (req, res) => {
   const v = db.prepare('SELECT * FROM visits WHERE id=?').get(req.params.id);
   if (!v) return res.status(404).json({ message: 'Visit not found' });
-  if (v.status !== 'INSIDE') return res.status(400).json({ message: 'Visitor is not inside' });
-  db.prepare("UPDATE visits SET status='CLOSED',exit_time=CURRENT_TIMESTAMP,exit_guard_id=? WHERE id=?").run(req.user.id, v.id);
+  if (v.status !== 'CHECKED_IN' && v.status !== 'INSIDE') return res.status(400).json({ message: 'Visitor is not inside/checked in' });
+  db.prepare("UPDATE visits SET status='CHECKED_OUT',exit_time=CURRENT_TIMESTAMP,exit_guard_id=? WHERE id=?").run(req.user.id, v.id);
+  logPassStateChange(v.id, v.status, 'CHECKED_OUT', req.user.id, req.user.role, 'Gate Check-out');
   audit(req.user.id, 'EXIT', 'VISIT', v.id);
   res.json({ message: 'Exit recorded' });
 });
 
-app.get('/api/reports/visitors', auth, roles('ADMIN', 'RECEPTION'), (req, res) => {
+app.get('/api/reports/visitors', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION', 'CEO'), (req, res) => {
   const rows = db.prepare(`SELECT x.visitor_code,v.name,v.mobile,v.company,v.purpose,v.department,u.name host_name,x.entry_time,x.exit_time,x.status FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id ORDER BY x.id DESC`).all();
   res.json(rows);
 });
 
-app.get('/api/audit', auth, roles('ADMIN'), (req, res) => res.json(db.prepare(`SELECT a.*,u.name actor_name FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 500`).all()));
+app.get('/api/audit', auth, roles('ADMIN', 'SUPER_ADMIN', 'CEO'), (req, res) => res.json(db.prepare(`SELECT a.*,u.name actor_name FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 500`).all()));
 
 app.get('/api/visits/:id/pass', auth, async (req, res) => {
   const r = db.prepare(`SELECT x.*,v.name,v.company,v.purpose,v.department,v.photo,u.name host_name FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?`).get(req.params.id);
@@ -637,5 +799,11 @@ app.get('/api/visits/:id/pass', auth, async (req, res) => {
   res.json({ ...r, qr });
 });
 
-app.listen(process.env.PORT || 8000, () => console.log(`OpsVision VAMS API running on http://localhost:${process.env.PORT || 8000}`));
+app.get('/api/public/pass/:passToken', async (req, res) => {
+  const r = db.prepare(`SELECT x.*,v.name,v.company,v.purpose,v.department,v.photo,u.name host_name, u.department host_department FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.pass_token=?`).get(req.params.passToken);
+  if (!r) return res.status(404).json({ message: 'Pass not found' });
+  const qr = await QRCode.toDataURL(r.visitor_code);
+  res.json({ ...r, qr });
+});
 
+app.listen(process.env.PORT || 8000, () => console.log(`OpsVision VAMS API running on http://localhost:${process.env.PORT || 8000}`));
