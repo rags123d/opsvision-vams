@@ -252,17 +252,25 @@ function dashboard(user = null) {
   const paramsToday = [today];
   const paramsGlobal = [];
 
-  // Scoped to specific Host if role is HOST or EMPLOYEE
-  if (user && (user.role === 'HOST' || user.role === 'EMPLOYEE')) {
+  // Scoped to specific Host if role is HOST, EMPLOYEE, or CEO
+  if (user && (user.role === 'HOST' || user.role === 'EMPLOYEE' || user.role === 'CEO')) {
     userClause = ' AND v.host_id=?';
     paramsToday.push(user.id);
     paramsGlobal.push(user.id);
   }
 
+  // Pending approvals counter is scoped to user's assigned host ID unless ADMIN/SUPER_ADMIN
+  let pendingUserClause = '';
+  const paramsPending = [];
+  if (user && user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
+    pendingUserClause = ' AND v.host_id=?';
+    paramsPending.push(user.id);
+  }
+
   const visitsToday = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE substr(x.created_at,1,10)=?${userClause}`).get(...paramsToday).c;
   const currentVisitors = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE (x.status='INSIDE' OR x.status='CHECKED_IN')${userClause}`).get(...paramsGlobal).c;
   const rejected = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE x.status='REJECTED'${userClause}`).get(...paramsGlobal).c;
-  const pendingApprovals = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE (x.status='PENDING_HOST_REVIEW' OR x.status='PENDING_APPROVAL' OR x.status='PENDING_VISITOR_CONFIRMATION')${userClause}`).get(...paramsGlobal).c;
+  const pendingApprovals = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE (x.status='PENDING_HOST_REVIEW' OR x.status='PENDING_APPROVAL' OR x.status='PENDING_VISITOR_CONFIRMATION')${pendingUserClause}`).get(...paramsPending).c;
   const approved = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE x.status='APPROVED'${userClause}`).get(...paramsGlobal).c;
   const exitedToday = db.prepare(`SELECT COUNT(*) c FROM visits x JOIN visitors v ON v.id=x.visitor_id WHERE (x.status='CLOSED' OR x.status='CHECKED_OUT') AND substr(x.exit_time,1,10)=?${userClause}`).get(...paramsToday).c;
 
@@ -372,7 +380,7 @@ app.post('/api/admin/test-email', auth, roles('ADMIN'), async (req, res) => {
 
 // Public Endpoint for Visitor Registration Dropdown (Hosts list)
 app.get('/api/public/hosts', (req, res) => {
-  res.json(db.prepare("SELECT id,name,department,email FROM users WHERE (role='HOST' OR role='EMPLOYEE') AND active=1 ORDER BY name").all());
+  res.json(db.prepare("SELECT id,name,department,email FROM users WHERE (role='HOST' OR role='EMPLOYEE' OR role='CEO' OR role='ADMIN' OR role='SUPER_ADMIN') AND active=1 ORDER BY name").all());
 });
 app.get('/api/public/departments', (req, res) => {
   res.json(db.prepare("SELECT id,name,code FROM departments WHERE active=1 ORDER BY name").all());
@@ -383,7 +391,7 @@ app.get('/api/public/purposes', (req, res) => {
 
 // User Management (Admin / Super Admin / Reception)
 app.get('/api/users', auth, roles('ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email,phone,active FROM users ORDER BY name').all()));
-app.get('/api/hosts', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'CEO'), (req, res) => res.json(db.prepare("SELECT id,name,username,role,department,email FROM users WHERE (role='HOST' OR role='EMPLOYEE') AND active=1 ORDER BY name").all()));
+app.get('/api/hosts', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO', 'HOST', 'EMPLOYEE'), (req, res) => res.json(db.prepare("SELECT id,name,username,role,department,email FROM users WHERE (role='HOST' OR role='EMPLOYEE' OR role='CEO' OR role='ADMIN' OR role='SUPER_ADMIN') AND active=1 ORDER BY name").all()));
 app.get('/api/master/departments', auth, (req, res) => res.json(db.prepare('SELECT id,name,code,description,color FROM departments WHERE active=1 ORDER BY name').all()));
 app.get('/api/master/purposes', auth, (req, res) => res.json(db.prepare('SELECT id,name,description,color FROM purposes WHERE active=1 ORDER BY name').all()));
 app.get('/api/master/departments/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,code,description,color,active FROM departments ORDER BY name').all()));
@@ -485,6 +493,85 @@ app.get('/api/visitors', auth, (req, res) => {
   res.json(db.prepare(sql).all(...p));
 });
 
+// Standard Visitor Registration Endpoint (Awaiting Host Review)
+app.post('/api/visitors/register', auth, async (req, res) => {
+  const { name, mobile, email, company, purpose, host_id, department, vehicle, photo, expected_checkin, expected_checkout } = req.body;
+  if (!name || !mobile || !host_id) return res.status(400).json({ message: 'Name, mobile and host are required' });
+  if (!/^\d{10}$/.test(String(mobile).trim())) return res.status(400).json({ message: 'Mobile number must be exactly 10 digits' });
+
+  const cleanMobile = String(mobile).trim();
+  const code = 'VAMS-' + Date.now().toString(36).toUpperCase();
+  const passToken = 'TOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const validUntil = expected_checkout || new Date(Date.now() + 8 * 3600000).toISOString();
+
+  // If created by host for themselves, auto approve; otherwise default to PENDING_HOST_REVIEW (Awaiting Approval)
+  const isHostSelf = (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && req.user.id === Number(host_id);
+  const status = isHostSelf ? 'APPROVED' : 'PENDING_HOST_REVIEW';
+
+  const tx = db.transaction(() => {
+    const r = db.prepare('INSERT INTO visitors(name,mobile,email,company,purpose,host_id,department,vehicle,photo,consent,otp) VALUES(?,?,?,?,?,?,?,?,?,1,?)')
+      .run(name, cleanMobile, email || '', company || '', purpose || 'Visit', host_id, department || '', vehicle || '', photo || null, otp);
+    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,expected_arrival_time,created_by,approved_by,pass_token) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(r.lastInsertRowid, code, status, validUntil, expected_checkin || null, expected_checkout || null, expected_checkin || null, req.user.id, status === 'APPROVED' ? req.user.id : null, passToken);
+    db.prepare('INSERT INTO approvals(visit_id,host_id,status) VALUES(?,?,?)').run(vr.lastInsertRowid, host_id, status === 'APPROVED' ? 'APPROVED' : 'PENDING');
+    logPassStateChange(vr.lastInsertRowid, null, status, req.user.id, req.user.role, 'Registered (Awaiting Host Approval)');
+    audit(req.user.id, 'REGISTER_VISITOR', 'VISIT', vr.lastInsertRowid, code);
+    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, otp, passToken, status };
+  });
+
+  const out = tx();
+
+  // Dispatch In-App Notification to Host
+  createNotification({
+    user_id: host_id,
+    type: 'VISITOR_REGISTERED',
+    title: '🔔 New Visitor Registered (Awaiting Approval)',
+    message: `${name} (${company || 'Individual'}) registered to meet you. Please review and approve.`,
+    link_id: out.visitId
+  });
+
+  res.status(201).json({ message: 'Visitor registered successfully! Status: Awaiting Host Approval.', ...out });
+});
+
+// Visitor Photo Upload Endpoint
+app.post('/api/visitors/:id/photo', auth, (req, res) => {
+  const { photo } = req.body;
+  if (!photo) return res.status(400).json({ message: 'Photo data required' });
+  db.prepare('UPDATE visitors SET photo=? WHERE id=?').run(photo, req.params.id);
+  res.json({ message: 'Photo saved successfully' });
+});
+
+// Update Visitor Details Endpoint
+app.put('/api/visitors/:id', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION', 'GUARD'), (req, res) => {
+  const { name, mobile, email, company, purpose, host_id, department, vehicle, expected_checkin, expected_checkout } = req.body;
+  const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
+  if (!v) return res.status(404).json({ message: 'Visitor record not found' });
+
+  db.prepare('UPDATE visitors SET name=?, mobile=?, email=?, company=?, purpose=?, host_id=?, department=?, vehicle=? WHERE id=?')
+    .run(name, mobile, email || '', company || '', purpose, host_id, department || '', vehicle || '', req.params.id);
+
+  if (expected_checkin || expected_checkout) {
+    db.prepare('UPDATE visits SET expected_checkin=?, expected_checkout=?, expected_arrival_time=? WHERE visitor_id=?')
+      .run(expected_checkin || null, expected_checkout || null, expected_checkin || null, req.params.id);
+  }
+
+  audit(req.user.id, 'UPDATE_VISITOR', 'VISITOR', req.params.id, name);
+  res.json({ message: 'Visitor record updated successfully' });
+});
+
+// Delete Visitor Endpoint
+app.delete('/api/visitors/:id', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION'), (req, res) => {
+  const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
+  if (!v) return res.status(404).json({ message: 'Visitor record not found' });
+
+  db.prepare('DELETE FROM visits WHERE visitor_id=?').run(req.params.id);
+  db.prepare('DELETE FROM visitors WHERE id=?').run(req.params.id);
+
+  audit(req.user.id, 'DELETE_VISITOR', 'VISITOR', req.params.id, v.name);
+  res.json({ message: 'Visitor deleted successfully' });
+});
+
 // Flow A: Public Self-Registration Endpoint (Visitor Initiated)
 app.post('/api/public/register-visit', async (req, res) => {
   const { name, mobile, email, company, purpose, host_id, department, vehicle, expected_arrival_time } = req.body;
@@ -547,7 +634,7 @@ app.post('/api/public/register-visit', async (req, res) => {
 });
 
 // Flow B: Staff Guest Pass Pre-Creation Endpoint (Staff/Host Initiated)
-app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION', 'HOST', 'EMPLOYEE'), async (req, res) => {
+app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION', 'HOST', 'EMPLOYEE', 'CEO'), async (req, res) => {
   const { name, mobile, email, company, purpose, host_id, department, vehicle, expected_arrival_time } = req.body;
   if (!name || !mobile || !purpose || !host_id || !expected_arrival_time) {
     return res.status(400).json({ message: 'Name, mobile, purpose, host and expected arrival time are required' });
@@ -559,7 +646,7 @@ app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTIO
   const validUntil = new Date(new Date(expected_arrival_time).getTime() + 8 * 3600000).toISOString();
 
   // If host themselves created the pass, it's auto approved!
-  const isCreatedBySelf = (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && req.user.id === Number(host_id);
+  const isCreatedBySelf = (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE' || req.user.role === 'CEO') && req.user.id === Number(host_id);
   const initialStatus = isCreatedBySelf ? 'APPROVED' : 'PENDING_HOST_REVIEW';
 
   const tx = db.transaction(() => {
@@ -590,13 +677,15 @@ app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTIO
 });
 
 // Host Approval / Propose-Time / Reject Endpoint
-app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN', 'SUPER_ADMIN', 'RECEPTION'), async (req, res) => {
+app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN', 'SUPER_ADMIN', 'RECEPTION', 'CEO'), async (req, res) => {
   const visit = db.prepare('SELECT x.*, v.name visitor_name, v.email visitor_email, v.mobile visitor_mobile, v.host_id, u.name host_name FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?').get(req.params.id);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
 
-  // Host user scoping check
-  if ((req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && visit.host_id !== req.user.id) {
-    return res.status(403).json({ message: 'You can only act on visitor passes assigned to you' });
+  // Host user scoping check: Only designated host or ADMIN/SUPER_ADMIN can take decision actions
+  const isHostSelf = visit.host_id === req.user.id;
+  const isAdmin = req.user.role === 'ADMIN' || req.user.role === 'SUPER_ADMIN';
+  if (!isHostSelf && !isAdmin) {
+    return res.status(403).json({ message: 'Forbidden: You can only approve, reschedule, or reject visits assigned to you as host.' });
   }
 
   const { action, proposed_time, notes } = req.body;
@@ -688,18 +777,21 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
 // Legacy Approval Compatibility Router
 app.get('/api/approvals', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO'), (req, res) => {
   let mine = '';
-  if (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') {
+  // ADMIN and SUPER_ADMIN view all approvals; all other roles see only visits where they are designated host
+  if (req.user.role !== 'ADMIN' && req.user.role !== 'SUPER_ADMIN') {
     mine = ' AND a.host_id=' + Number(req.user.id);
   }
   res.json(db.prepare(`SELECT a.*,x.visitor_code,x.status visit_status,x.expected_arrival_time,x.proposed_arrival_time,x.rejection_reason,x.initiator_type,v.name visitor_name,v.company,v.purpose,v.mobile,u.name host_name FROM approvals a JOIN visits x ON x.id=a.visit_id JOIN visitors v ON v.id=x.visitor_id JOIN users u ON u.id=a.host_id WHERE 1=1 ${mine} ORDER BY a.id DESC`).all());
 });
 
-app.post('/api/approvals/:visitId', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN'), (req, res) => {
+app.post('/api/approvals/:visitId', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO'), (req, res) => {
   const visit = db.prepare('SELECT * FROM visits WHERE id=?').get(req.params.visitId);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
   const approval = db.prepare('SELECT * FROM approvals WHERE visit_id=?').get(visit.id);
-  if ((req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && approval.host_id !== req.user.id) {
-    return res.status(403).json({ message: 'Not your approval' });
+  const isHostSelf = approval.host_id === req.user.id;
+  const isAdmin = req.user.role === 'ADMIN' || req.user.role === 'SUPER_ADMIN';
+  if (!isHostSelf && !isAdmin) {
+    return res.status(403).json({ message: 'Forbidden: You can only act on visitor passes assigned to you as host.' });
   }
   const status = req.body.action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
   const notes = req.body.notes || (status === 'REJECTED' ? 'Rejected by host' : 'Approved');
