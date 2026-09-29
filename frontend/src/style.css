@@ -1,16 +1,17 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Quintessential&family=Cinzel+Decorative:wght@700;900&family=Rozha+One&family=Berkshire+Swash&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap');
 
 :root {
+  --font-logo: 'Quintessential', 'Cinzel Decorative', 'Rozha One', 'Berkshire Swash', serif;
   --font-main: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
   /* Light theme (default) */
-  --bg-app: #f7f8ff;
+  --bg-app: #f5f3ff;
   --bg-card: #ffffff;
   --bg-card-subtle: #f0f4ff;
   --bg-hover: #e9efff;
   --table-header-bg: #f3f6ff;
-  --app-background: radial-gradient(circle at 100% 0%, rgba(236, 72, 153, 0.1), transparent 28%), radial-gradient(circle at 0% 100%, rgba(91, 75, 219, 0.1), transparent 32%);
+  --app-background: radial-gradient(circle at 100% 0%, rgba(109, 78, 232, 0.08), transparent 28%), radial-gradient(circle at 0% 100%, rgba(91, 75, 219, 0.08), transparent 32%);
 
   --sidebar-bg: #f5f3ff;
   --sidebar-header: #ede9fe;
@@ -24,7 +25,7 @@
   --text-muted: #64748b;
   --text-light: #94a3b8;
 
-  --top-header-bg: #ffffff;
+  --top-header-bg: #f5f3ff;
 
   /* Accent colors */
   --primary: #5b4bdb;
@@ -73,6 +74,12 @@
   --radius-full: 9999px;
 
   --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.swagatham-brand-font {
+  font-family: var(--font-logo);
+  font-weight: 700;
+  letter-spacing: 0.6px;
 }
 
 /* Dark theme overrides – applied when .dark-theme class is on <body> */
@@ -1008,25 +1015,30 @@ body {
 }
 
 .pass-header {
-  background: linear-gradient(135deg, #0f172a, #1e3a8a);
-  color: white;
-  padding: 20px 24px;
+  background: linear-gradient(135deg, var(--sidebar-header, #ede9fe), var(--sidebar-bg, #f5f3ff));
+  color: var(--text-main, #0f172a);
+  border-bottom: 1px solid var(--sidebar-border, #ddd6fe);
+  padding: 22px 20px 16px;
   text-align: center;
   position: relative;
   flex-shrink: 0;
 }
 
 .pass-header h3 {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 800;
-  letter-spacing: -0.5px;
+  color: var(--sidebar-text, #4c1d95);
+  letter-spacing: -0.3px;
+  margin-top: 4px;
 }
 
 .pass-header p {
-  font-size: 12px;
-  color: #93c5fd;
+  font-size: 10px;
+  color: var(--text-muted, #64748b);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 1.2px;
+  font-weight: 700;
+  margin-top: 2px;
 }
 
 .pass-body {
@@ -1192,13 +1204,16 @@ body {
 }
 
 .pass-header-logo {
-  width: 56px;
-  height: 56px;
+  width: 100%;
+  max-width: 190px;
+  height: auto;
+  max-height: 95px;
   object-fit: contain;
   background: transparent;
   padding: 0;
-  margin: 0 auto 10px auto;
+  margin: 0 auto 6px auto;
   display: block;
+  filter: drop-shadow(0 2px 8px rgba(109, 78, 232, 0.1));
 }
 
 .login-brand p {
@@ -1617,3 +1632,164 @@ body {
   text-transform: uppercase;
   margin-bottom: 10px;
 }
+
+/* ================= SWAGATHAM LOGO 4-PART CONVERGENCE ANIMATION ================= */
+.logo-anim-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  z-index: 999999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 0.25s ease-out;
+}
+
+.logo-anim-overlay.fade-out {
+  opacity: 0 !important;
+}
+
+.logo-anim-stage {
+  position: relative;
+  width: 520px;
+  height: 410px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+  will-change: transform, opacity;
+  opacity: 1;
+}
+
+.logo-anim-stage.disappearing {
+  animation: logoZoomAndDisappear 0.3s ease-out forwards !important;
+}
+
+/* Part A: Flower (Lotus at top center) - Starts top (-250px), small (0.3 scale), slides down & enlarges to 1.0 */
+.logo-part-a {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: 50% 15%;
+  animation: partAFlowerIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Part B: Right Hand & Leaf - Starts right (+350px), enlarged (1.6 scale), slides left & downsizes to 1.0 */
+.logo-part-b {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: 70% 40%;
+  animation: partBRightHandIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Part C: Left Hand & Leaf - Starts left (-350px), enlarged (1.6 scale), slides right & downsizes to 1.0 */
+.logo-part-c {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: 30% 40%;
+  animation: partCLeftHandIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Part D: Swagatham Text - Starts bottom (+250px), enlarged (1.6 scale), slides up & downsizes to 1.0 */
+.logo-part-d {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: 50% 85%;
+  animation: partDTextIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Keyframes for Part A */
+@keyframes partAFlowerIn {
+  0% {
+    transform: translateY(-250px) scale(0.3);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Keyframes for Part B */
+@keyframes partBRightHandIn {
+  0% {
+    transform: translateX(350px) scale(1.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Keyframes for Part C */
+@keyframes partCLeftHandIn {
+  0% {
+    transform: translateX(-350px) scale(1.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Keyframes for Part D */
+@keyframes partDTextIn {
+  0% {
+    transform: translateY(250px) scale(1.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Logo Convergence Zoom & Quick Vanish */
+@keyframes logoZoomAndDisappear {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}

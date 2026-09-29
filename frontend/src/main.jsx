@@ -101,21 +101,63 @@ const Icons = {
     <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
+  ),
+  Help: () => (
+    <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M12 18h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
   )
 };
 
 function StatusBadge({ status }) {
   const map = {
-    INSIDE: { label: 'Inside', cls: 'badge-inside' },
+    INSIDE: { label: 'Checked In', cls: 'badge-inside' },
+    CHECKED_IN: { label: 'Checked In', cls: 'badge-inside' },
     APPROVED: { label: 'Approved', cls: 'badge-approved' },
     PENDING_APPROVAL: { label: 'Pending', cls: 'badge-pending' },
+    PENDING_HOST_REVIEW: { label: 'Pending Host Review', cls: 'badge-pending' },
     PENDING: { label: 'Pending', cls: 'badge-pending' },
     REJECTED: { label: 'Rejected', cls: 'badge-rejected' },
     DECLINED: { label: 'Declined', cls: 'badge-rejected' },
-    CLOSED: { label: 'Exited', cls: 'badge-closed' }
+    CLOSED: { label: 'Exited', cls: 'badge-closed' },
+    CHECKED_OUT: { label: 'Exited', cls: 'badge-closed' }
   };
   const item = map[status] || { label: status || 'Unknown', cls: 'badge-closed' };
   return <span className={`badge ${item.cls}`}>{item.label}</span>;
+}
+
+// 4-Part Swagatham Logo Convergence Animation Overlay Component
+function LogoAnimationOverlay({ onComplete }) {
+  const [disappearing, setDisappearing] = useState(false);
+  const [fadeOut, setFadeOut] = useState(false);
+
+  useEffect(() => {
+    // Stage 1: Convergence (0ms - 800ms)
+    // Stage 2: Zoom & vanish (800ms - 1100ms)
+    const timer1 = setTimeout(() => setDisappearing(true), 800);
+    const timer2 = setTimeout(() => setFadeOut(true), 1000);
+    // Stage 3: Remove overlay completely from DOM (1100ms)
+    const timer3 = setTimeout(() => {
+      if (onComplete) onComplete();
+    }, 1100);
+
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
+    };
+  }, [onComplete]);
+
+  return (
+    <div className={`logo-anim-overlay ${fadeOut ? 'fade-out' : ''}`}>
+      <div className={`logo-anim-stage ${disappearing ? 'disappearing' : ''}`}>
+        <img src="/logo_parts/part_d_text.png" alt="Swagatham Text Part D" className="logo-part-d" />
+        <img src="/logo_parts/part_c_lefthand.png" alt="Left Hand & Leaf Part C" className="logo-part-c" />
+        <img src="/logo_parts/part_b_righthand.png" alt="Right Hand & Leaf Part B" className="logo-part-b" />
+        <img src="/logo_parts/part_a_flower.png" alt="Lotus Flower Part A" className="logo-part-a" />
+      </div>
+    </div>
+  );
 }
 
 // Digital Pass Modal Component
@@ -126,7 +168,7 @@ function PassModal({ passData, onClose }) {
       <div className="pass-card" onClick={e => e.stopPropagation()}>
         <div className="pass-header">
           <img src="/logo.png" alt="Swagatham Logo" className="pass-header-logo" />
-          <h3>Swagatham Visitor Pass</h3>
+          <h3>Visitor Pass</h3>
           <p>Digital Security Badge</p>
         </div>
         <div className="pass-body">
@@ -189,10 +231,339 @@ function PassModal({ passData, onClose }) {
   );
 }
 
-// Login Screen
+// Public Visitor Reschedule Confirmation Screen
+function PublicVisitorRescheduleConfirmScreen({ token, onDone }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+  const [acting, setActing] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/public/pass-confirm/' + token)
+      .then(r => r.json())
+      .then(d => {
+        if (d.message && !d.visitor_name) setErr(d.message);
+        else setData(d);
+      })
+      .catch(e => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  const respond = async (action) => {
+    setActing(true);
+    setErr('');
+    try {
+      const r = await fetch('/api/public/pass-confirm/' + token, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.message || 'Action failed');
+      setMsg(res.message);
+      const refresh = await fetch('/api/public/pass-confirm/' + token).then(x => x.json());
+      setData(refresh);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setActing(false);
+    }
+  };
+
+  return (
+    <div className="login-screen">
+      <div className="login-card" style={{ maxWidth: '520px' }}>
+        <div className="login-brand">
+          <div className="login-logo-box">
+            <img src="/logo.png" alt="Swagatham Logo" className="login-logo-img" />
+          </div>
+          <h3>Visitor Schedule Confirmation</h3>
+          <p>OpsVision Smart Access Pre-Approval Gateway</p>
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '30px' }}>Loading schedule details...</div>
+        ) : err ? (
+          <div className="alert-box alert-error">{err}</div>
+        ) : (
+          <div>
+            {msg && <div className="alert-box alert-success">{msg}</div>}
+
+            <div className="pass-details-list" style={{ background: 'var(--bg-card-subtle)', padding: '16px', borderRadius: '12px', marginBottom: '20px' }}>
+              <div className="pass-detail-item">
+                <span>Visitor Name</span>
+                <strong>{data.visitor_name}</strong>
+              </div>
+              <div className="pass-detail-item">
+                <span>Host / Department</span>
+                <span>{data.host_name || 'Host'} ({data.host_department || 'General'})</span>
+              </div>
+              <div className="pass-detail-item">
+                <span>Purpose</span>
+                <span>{data.purpose}</span>
+              </div>
+              <div className="pass-detail-item">
+                <span>Current Status</span>
+                <StatusBadge status={data.status} />
+              </div>
+              {data.proposed_arrival_time && (
+                <div className="pass-detail-item" style={{ background: '#fffbeb', padding: '10px', borderRadius: '8px', border: '1px solid #fde68a' }}>
+                  <span style={{ color: '#b45309', fontWeight: 'bold' }}>Host Proposed New Time</span>
+                  <span style={{ color: '#b45309', fontWeight: 'bold' }}>{new Date(data.proposed_arrival_time).toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+
+            {data.status === 'PENDING_VISITOR_CONFIRMATION' && data.proposed_arrival_time && (
+              <div style={{ display: 'flex', gap: '12px', marginTop: '15px' }}>
+                <button
+                  className="btn-primary"
+                  style={{ flex: 1, backgroundColor: '#059669' }}
+                  disabled={acting}
+                  onClick={() => respond('ACCEPT')}
+                >
+                  {acting ? '...' : '✅ Accept Proposed Time'}
+                </button>
+                <button
+                  className="btn-secondary"
+                  style={{ flex: 1, color: 'var(--danger)', borderColor: 'var(--danger-border)' }}
+                  disabled={acting}
+                  onClick={() => respond('DECLINE')}
+                >
+                  {acting ? '...' : '❌ Decline'}
+                </button>
+              </div>
+            )}
+
+            <button className="btn-secondary" style={{ width: '100%', marginTop: '16px' }} onClick={onDone}>
+              Back to System Login
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Public Visitor Self-Registration Modal
+function PublicVisitorSelfRegisterModal({ onClose }) {
+  const [hosts, setHosts] = useState([]);
+  const [purposes, setPurposes] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [form, setForm] = useState({ name: '', mobile: '', email: '', company: '', purpose: '', host_id: '', department: '', vehicle: '', expected_arrival_time: '' });
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [resData, setResData] = useState(null);
+
+  useEffect(() => {
+    fetch('/api/public/hosts').then(r => r.json()).then(setHosts).catch(() => { });
+    fetch('/api/public/purposes').then(r => r.json()).then(setPurposes).catch(() => { });
+    fetch('/api/public/departments').then(r => r.json()).then(setDepartments).catch(() => { });
+  }, []);
+
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!/^\d{10}$/.test(form.mobile || '')) {
+      setMsg('Error: Mobile number must be exactly 10 digits');
+      return;
+    }
+    if (!form.expected_arrival_time) {
+      setMsg('Error: Expected arrival time is required');
+      return;
+    }
+    setLoading(true);
+    setMsg('');
+    try {
+      const r = await fetch('/api/public/register-visit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form)
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message || 'Registration failed');
+      setResData(d);
+      setMsg('Pre-approval registration submitted successfully!');
+    } catch (err) {
+      setMsg('Error: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="pass-card" style={{ maxWidth: '680px' }} onClick={e => e.stopPropagation()}>
+        <div className="pass-header" style={{ background: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)' }}>
+          <h3>Public Visitor Pre-Approval Registration</h3>
+          <p>Request entry approval prior to site arrival</p>
+        </div>
+        <div className="pass-body">
+          {msg && <div className={`alert-box ${msg.startsWith('Error') ? 'alert-error' : 'alert-success'}`}><strong>{msg}</strong></div>}
+
+          {resData ? (
+            <div style={{ textAlign: 'center', padding: '10px 0' }}>
+              <div style={{ fontSize: '48px', marginBottom: '10px' }}>🎟️</div>
+              <h4>Pre-Approval Request Sent to Host</h4>
+              <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
+                Your visit request code is: <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--primary)', fontSize: '18px' }}>{resData.visitorCode}</strong>
+              </p>
+              <div style={{ background: 'var(--bg-card-subtle)', padding: '15px', borderRadius: '10px', marginTop: '15px', textAlign: 'left' }}>
+                <div style={{ fontSize: '13px', marginBottom: '6px' }}><strong>Status:</strong> <span className="badge badge-pending">PENDING HOST REVIEW</span></div>
+                <div style={{ fontSize: '13px', marginBottom: '6px' }}><strong>Pass Token:</strong> <code>{resData.passToken}</code></div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>An email/notification has been dispatched to your host. You will receive an instant approval notification once reviewed.</div>
+              </div>
+              <button className="btn-primary" style={{ marginTop: '20px', width: '100%' }} onClick={onClose}>
+                Done & Close
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Full Name <span className="req">*</span></label>
+                <input required className="form-control" placeholder="e.g. Spandana Kumar" value={form.name} onChange={e => setField('name', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Mobile Number (10 digits) <span className="req">*</span></label>
+                <input required type="tel" inputMode="numeric" maxLength={10} className="form-control" placeholder="10 digits (e.g. 9876543210)" value={form.mobile} onChange={e => setField('mobile', e.target.value.replace(/\D/g, '').slice(0, 10))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Email Address</label>
+                <input type="email" className="form-control" placeholder="your.email@company.com" value={form.email} onChange={e => setField('email', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Company / Organization</label>
+                <input className="form-control" placeholder="e.g. Spandana Tech" value={form.company} onChange={e => setField('company', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Host / Person to Meet <span className="req">*</span></label>
+                <select required className="form-control" value={form.host_id} onChange={e => setField('host_id', e.target.value)}>
+                  <option value="">Select Host</option>
+                  {hosts.map(h => <option key={h.id} value={h.id}>{h.name} ({h.department || 'Host'})</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Purpose of Visit <span className="req">*</span></label>
+                <select required className="form-control" value={form.purpose} onChange={e => setField('purpose', e.target.value)}>
+                  <option value="">Select Purpose</option>
+                  {purposes.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                  <option value="Client Meeting">Client Meeting</option>
+                  <option value="Job Interview">Job Interview</option>
+                  <option value="Vendor Meeting">Vendor Meeting</option>
+                  <option value="Audit / Inspection">Audit / Inspection</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Department / Area</label>
+                <select className="form-control" value={form.department} onChange={e => setField('department', e.target.value)}>
+                  <option value="">Select Department</option>
+                  {departments.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Expected Arrival Date & Time <span className="req">*</span></label>
+                <input required type="datetime-local" className="form-control" value={form.expected_arrival_time} onChange={e => setField('expected_arrival_time', e.target.value)} />
+              </div>
+              <div className="form-group full-width">
+                <label className="form-label">Vehicle Number (Optional)</label>
+                <input className="form-control" placeholder="e.g. KA-05-XY-9999" value={form.vehicle} onChange={e => setField('vehicle', e.target.value)} />
+              </div>
+              <div className="form-group full-width" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={loading}>
+                  {loading ? 'Submitting...' : 'Submit Pre-Approval Request'}
+                </button>
+                <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Host Account Registration Modal
+function HostRegisterModal({ onClose, onRegistered }) {
+  const [form, setForm] = useState({ name: '', email: '', password: '', department: 'Operations', phone: '' });
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setMsg('');
+    try {
+      const r = await fetch('/api/auth/register-host', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form)
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message || 'Host registration failed');
+      localStorage.setItem('token', d.token);
+      localStorage.setItem('user', JSON.stringify(d.user));
+      setMsg('Host account created!');
+      setTimeout(() => {
+        onRegistered(d.user);
+      }, 800);
+    } catch (err) {
+      setMsg('Error: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="pass-card" style={{ maxWidth: '520px' }} onClick={e => e.stopPropagation()}>
+        <div className="pass-header" style={{ background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)' }}>
+          <h3>Create Host / Employee Account</h3>
+          <p>Register as a site host to manage visitor pre-approvals</p>
+        </div>
+        <div className="pass-body">
+          {msg && <div className={`alert-box ${msg.startsWith('Error') ? 'alert-error' : 'alert-success'}`}><strong>{msg}</strong></div>}
+          <form onSubmit={handleSubmit} className="form-grid">
+            <div className="form-group full-width">
+              <label className="form-label">Full Name <span className="req">*</span></label>
+              <input required className="form-control" placeholder="e.g. Ramesh Host" value={form.name} onChange={e => setField('name', e.target.value)} />
+            </div>
+            <div className="form-group full-width">
+              <label className="form-label">Company Email <span className="req">*</span></label>
+              <input required type="email" className="form-control" placeholder="host.email@opsvision.com" value={form.email} onChange={e => setField('email', e.target.value)} />
+            </div>
+            <div className="form-group full-width">
+              <label className="form-label">Password <span className="req">*</span></label>
+              <input required type="password" className="form-control" placeholder="Set secure password" value={form.password} onChange={e => setField('password', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Department</label>
+              <input className="form-control" placeholder="e.g. Operations, IT" value={form.department} onChange={e => setField('department', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Mobile Phone</label>
+              <input type="tel" className="form-control" placeholder="10 digits" value={form.phone} onChange={e => setField('phone', e.target.value)} />
+            </div>
+            <div className="form-group full-width" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+              <button type="submit" className="btn-primary" style={{ flex: 1, backgroundColor: '#059669' }} disabled={loading}>
+                {loading ? 'Creating...' : 'Register Host Account'}
+              </button>
+              <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Clean Login Screen (No pre-filled credentials, no public buttons)
 function Login({ onLogin }) {
-  const [u, setU] = useState('admin');
-  const [p, setP] = useState('admin123');
+  const [u, setU] = useState('');
+  const [p, setP] = useState('');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -226,63 +597,55 @@ function Login({ onLogin }) {
 
         {err && <div className="alert-box alert-error">{err}</div>}
 
-        <div className="form-group">
-          <label className="form-label">Username</label>
-          <input
-            className="form-control"
-            placeholder="Enter username"
-            value={u}
-            onChange={e => setU(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Password</label>
-          <input
-            className="form-control"
-            type="password"
-            placeholder="Enter password"
-            value={p}
-            onChange={e => setP(e.target.value)}
-          />
-        </div>
-
-        <button
-          className="btn-primary"
-          style={{ width: '100%' }}
-          disabled={loading}
-          onClick={() => doLogin(u, p)}
-        >
-          {loading ? 'Authenticating...' : 'Sign In'}
-        </button>
-
-        <div>
-          <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--text-muted)' }}>
-            DEMO ONE-CLICK ROLES:
-          </span>
-          <div className="quick-login-pills">
-            <button className="quick-login-btn" onClick={() => { setU('admin'); setP('admin123'); doLogin('admin', 'admin123'); }}>
-              🛡️ Admin
-            </button>
-            <button className="quick-login-btn" onClick={() => { setU('guard'); setP('guard123'); doLogin('guard', 'guard123'); }}>
-              🚪 Guard
-            </button>
-            <button className="quick-login-btn" onClick={() => { setU('reception'); setP('reception123'); doLogin('reception', 'reception123'); }}>
-              🏢 Reception
-            </button>
-            <button className="quick-login-btn" onClick={() => { setU('employee'); setP('employee123'); doLogin('employee', 'employee123'); }}>
-              👤 Host
-            </button>
+        <form onSubmit={(e) => { e.preventDefault(); doLogin(u, p); }} autoComplete="off">
+          <div className="form-group">
+            <label className="form-label">Username / Email</label>
+            <input
+              className="form-control"
+              placeholder="Enter username or email"
+              value={u}
+              onChange={e => setU(e.target.value)}
+              autoComplete="off"
+              required
+            />
           </div>
-        </div>
+
+          <div className="form-group">
+            <label className="form-label">Password</label>
+            <input
+              className="form-control"
+              type="password"
+              placeholder="Enter password"
+              value={p}
+              onChange={e => setP(e.target.value)}
+              autoComplete="new-password"
+              required
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="btn-primary"
+            style={{ width: '100%' }}
+            disabled={loading}
+          >
+            {loading ? 'Authenticating...' : 'Sign In'}
+          </button>
+        </form>
       </div>
     </div>
   );
 }
 
-// App Shell with Left Sidebar
+// App Shell with Left Sidebar & Reschedule Confirm Router
 function App() {
   const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
+  const params = new URLSearchParams(window.location.search);
+  const confirmToken = params.get('confirmToken');
+
+  if (confirmToken) {
+    return <PublicVisitorRescheduleConfirmScreen token={confirmToken} onDone={() => { window.location.href = '/'; }} />;
+  }
 
   if (!user) return <Login onLogin={setUser} />;
   return (
@@ -468,6 +831,7 @@ function Shell({ user, setUser, logout }) {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showWebapkModal, setShowWebapkModal] = useState(false);
   const [showSmtpModal, setShowSmtpModal] = useState(false);
+  const [showGlobalLogoAnim, setShowGlobalLogoAnim] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const lastNotifCountRef = useRef(0);
 
@@ -571,13 +935,14 @@ function Shell({ user, setUser, logout }) {
   };
 
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard },
-    { id: 'register', label: 'Visitor Registration', icon: Icons.Register, roles: ['ADMIN', 'GUARD', 'RECEPTION'] },
-    { id: 'visitors', label: 'Visitor Directory', icon: Icons.Visitors },
-    { id: 'approvals', label: 'Host Approvals', icon: Icons.Approvals, badge: pendingCount > 0 ? pendingCount : null, roles: ['ADMIN', 'RECEPTION', 'EMPLOYEE'] },
-    { id: 'reports', label: 'Reports & Analytics', icon: Icons.Reports, roles: ['ADMIN', 'RECEPTION'] },
-    { id: 'audit', label: 'Digital Audit Trail', icon: Icons.Audit, roles: ['ADMIN'] },
-    { id: 'masterdata', label: 'Master Data', icon: Icons.MasterData, roles: ['ADMIN'] }
+    { id: 'dashboard', label: 'Dashboard', icon: Icons.Dashboard, roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'] },
+    { id: 'register', label: 'Visitor Registration', icon: Icons.Register, roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'] },
+    { id: 'visitors', label: 'Visitor Directory', icon: Icons.Visitors, roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'] },
+    { id: 'approvals', label: 'Host Approvals', icon: Icons.Approvals, badge: pendingCount > 0 ? pendingCount : null, roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'HOST', 'EMPLOYEE'] },
+    { id: 'reports', label: 'Reports & Analytics', icon: Icons.Reports, roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION'] },
+    { id: 'audit', label: 'Digital Audit Trail', icon: Icons.Audit, roles: ['SUPER_ADMIN', 'ADMIN', 'CEO'] },
+    { id: 'masterdata', label: 'Master Data', icon: Icons.MasterData, roles: ['SUPER_ADMIN', 'ADMIN'] },
+    { id: 'help', label: 'Help & User Guide', icon: Icons.Help, roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'] }
   ].filter(item => !item.roles || item.roles.includes(user.role));
 
   const currentNav = navItems.find(x => x.id === tab) || { label: 'Dashboard' };
@@ -705,14 +1070,17 @@ function Shell({ user, setUser, logout }) {
               )}
             </div>
 
-            {/* SMTP Settings Button - Admin Only */}
-            {user.role === 'ADMIN' && (
+            {/* SMTP Settings Button - Admin / Super Admin Only */}
+            {(user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') && (
               <button className="btn-secondary" onClick={() => setShowSmtpModal(true)} title="Email SMTP Settings" style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 12px' }}>
                 <Icons.Mail /> SMTP
               </button>
             )}
 
             <div className="clock-badge">{currentTime}</div>
+            <button className="btn-secondary" onClick={() => setShowGlobalLogoAnim(true)} title="Play Swagatham 4-Part Logo Animation" style={{ marginLeft: '4px', fontSize: '12px' }}>
+              ✨ Logo Anim
+            </button>
             <button className="btn-secondary theme-toggle-btn" onClick={toggleTheme} style={{ marginLeft: '4px' }} title="Toggle Theme">
               {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
             </button>
@@ -727,9 +1095,11 @@ function Shell({ user, setUser, logout }) {
           {tab === 'reports' && <Reports />}
           {tab === 'audit' && <Audit />}
           {tab === 'masterdata' && <MasterData />}
+          {tab === 'help' && <HelpGuide user={user} setTab={setTab} />}
         </div>
       </div>
 
+      {showGlobalLogoAnim && <LogoAnimationOverlay onComplete={() => setShowGlobalLogoAnim(false)} />}
       <PassModal passData={passData} onClose={() => setPassData(null)} />
       {showWebapkModal && <WebapkModal onClose={() => setShowWebapkModal(false)} deferredPrompt={deferredPrompt} />}
       {showSmtpModal && <SmtpSettingsModal onClose={() => setShowSmtpModal(false)} />}
@@ -756,6 +1126,71 @@ function Dashboard({ user, setTab, viewPass }) {
   };
 
   useEffect(loadData, []);
+
+  const role = user.role;
+
+  // Role-based Quick Actions Configuration
+  const allQuickActions = [
+    {
+      id: 'register',
+      label: (role === 'HOST' || role === 'EMPLOYEE') ? '+ Pre-Issue Guest Pass' : '+ Register Visitor',
+      icon: Icons.Register,
+      tab: 'register',
+      roles: ['SUPER_ADMIN', 'ADMIN', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE', 'CEO'],
+      color: '#2563eb'
+    },
+    {
+      id: 'approvals',
+      label: 'Host Approvals',
+      icon: Icons.Approvals,
+      tab: 'approvals',
+      roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'HOST', 'EMPLOYEE'],
+      badge: stats.pendingApprovals > 0 ? stats.pendingApprovals : null,
+      color: '#f59e0b'
+    },
+    {
+      id: 'visitors',
+      label: 'Visitor Directory',
+      icon: Icons.Visitors,
+      tab: 'visitors',
+      roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'],
+      color: '#10b981'
+    },
+    {
+      id: 'reports',
+      label: 'Reports & Analytics',
+      icon: Icons.Reports,
+      tab: 'reports',
+      roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION'],
+      color: '#8b5cf6'
+    },
+    {
+      id: 'audit',
+      label: 'Audit Trail',
+      icon: Icons.Audit,
+      tab: 'audit',
+      roles: ['SUPER_ADMIN', 'ADMIN', 'CEO'],
+      color: '#06b6d4'
+    },
+    {
+      id: 'masterdata',
+      label: 'Master Data',
+      icon: Icons.MasterData,
+      tab: 'masterdata',
+      roles: ['SUPER_ADMIN', 'ADMIN'],
+      color: '#6366f1'
+    },
+    {
+      id: 'help',
+      label: 'User Guide',
+      icon: Icons.Help,
+      tab: 'help',
+      roles: ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'],
+      color: '#059669'
+    }
+  ];
+
+  const quickActions = allQuickActions.filter(act => act.roles.includes(role));
 
   const kpis = [
     {
@@ -817,7 +1252,68 @@ function Dashboard({ user, setTab, viewPass }) {
   ];
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* Top Scoped Quick Actions Bar (Role-Based Access Control) */}
+      <div className="panel" style={{ marginBottom: '4px' }}>
+        <div className="panel-header" style={{ padding: '14px 20px', background: 'var(--bg-card-subtle)' }}>
+          <h3 className="panel-title" style={{ fontSize: '15px' }}>
+            <span style={{ fontSize: '18px' }}>⚡</span> Role Quick Shortcuts ({role})
+          </h3>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: '600' }}>
+            Single-tap role action items
+          </span>
+        </div>
+        <div className="panel-body" style={{ padding: '16px 20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
+            {quickActions.map(act => {
+              const Icon = act.icon;
+              return (
+                <button
+                  key={act.id}
+                  className="quick-action-btn"
+                  onClick={() => setTab(act.tab)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '12px 16px',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    textAlign: 'left',
+                    position: 'relative'
+                  }}
+                >
+                  <div style={{
+                    width: '36px', height: '36px', borderRadius: '10px',
+                    background: act.color + '15', color: act.color,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0
+                  }}>
+                    <Icon />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: '700', fontSize: '13px', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {act.label}
+                    </div>
+                  </div>
+                  {act.badge ? (
+                    <span style={{
+                      background: '#ef4444', color: '#fff', fontSize: '11px', fontWeight: '800',
+                      padding: '2px 7px', borderRadius: '10px'
+                    }}>
+                      {act.badge}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
       {/* Top Stat Cards */}
       <div className="dashboard-grid">
         {kpis.map((kpi, idx) => {
@@ -911,30 +1407,8 @@ function Dashboard({ user, setTab, viewPass }) {
           </div>
         </div>
 
-        {/* Right column: Quick Actions & Workflow Guide */}
+        {/* Right column: Workflow Guide */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <div className="panel">
-            <div className="panel-header">
-              <h3 className="panel-title">Quick Actions</h3>
-            </div>
-            <div className="panel-body">
-              <div className="quick-actions-grid">
-                <button className="quick-action-btn" onClick={() => setTab('register')}>
-                  <Icons.Register />
-                  <span>+ New Visitor</span>
-                </button>
-                <button className="quick-action-btn" onClick={() => setTab('approvals')}>
-                  <Icons.Approvals />
-                  <span>Approvals</span>
-                </button>
-                <button className="quick-action-btn" onClick={() => setTab('reports')}>
-                  <Icons.Reports />
-                  <span>Print Report</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
           <div className="panel">
             <div className="panel-header">
               <h3 className="panel-title">Access Lifecycle</h3>
@@ -974,19 +1448,36 @@ function Dashboard({ user, setTab, viewPass }) {
 function WebcamCapture({ onCapture, onCancel, mandatory }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const [stream, setStream] = useState(null);
+  const streamRef = useRef(null);
 
   useEffect(() => {
+    let active = true;
     navigator.mediaDevices.getUserMedia({ video: true })
       .then(s => {
-        setStream(s);
+        if (!active) {
+          s.getTracks().forEach(t => t.stop());
+          return;
+        }
+        streamRef.current = s;
         if (videoRef.current) videoRef.current.srcObject = s;
       })
       .catch(err => console.error('Error accessing webcam:', err));
+
     return () => {
-      if (stream) stream.getTracks().forEach(t => t.stop());
+      active = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
     };
   }, []);
+
+  const stopTracks = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+  };
 
   const capture = () => {
     if (videoRef.current && canvasRef.current) {
@@ -995,35 +1486,44 @@ function WebcamCapture({ onCapture, onCancel, mandatory }) {
       canvasRef.current.height = videoRef.current.videoHeight;
       ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
       const dataUrl = canvasRef.current.toDataURL('image/jpeg');
+      stopTracks();
       onCapture(dataUrl);
     }
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', marginTop: '15px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', marginTop: '10px' }}>
       <video ref={videoRef} autoPlay playsInline style={{ width: '100%', maxWidth: '300px', borderRadius: '8px' }} />
       <canvas ref={canvasRef} style={{ display: 'none' }} />
       <div style={{ display: 'flex', gap: '10px' }}>
-        <button className="btn-primary" onClick={capture}>Take Photo</button>
-        {!mandatory && <button className="btn-secondary" onClick={onCancel}>Skip</button>}
+        <button type="button" className="btn-primary" onClick={capture}>📸 Snap Photo</button>
+        {!mandatory && (
+          <button type="button" className="btn-secondary" onClick={() => { stopTracks(); onCancel(); }}>
+            Close Camera
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 // ================= REGISTRATION VIEW =================
-function Register({ setTab, viewPass }) {
+function Register({ user, setTab, viewPass }) {
   const [hosts, setHosts] = useState([]);
-  const [form, setForm] = useState({ consent: true });
+  const [form, setForm] = useState(() => ({
+    consent: true,
+    host_id: (user && (user.role === 'HOST' || user.role === 'EMPLOYEE')) ? user.id : ''
+  }));
   const [out, setOut] = useState(null);
   const [msg, setMsg] = useState('');
   const [loading, setLoading] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
-  const [photoSaved, setPhotoSaved] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState(null);
   const [departments, setDepartments] = useState([]);
   const [purposes, setPurposes] = useState([]);
   const [purposeOther, setPurposeOther] = useState(false);
   const [departmentOther, setDepartmentOther] = useState(false);
+  const [showLogoAnim, setShowLogoAnim] = useState(false);
 
   useEffect(() => {
     api('/hosts').then(setHosts).catch(() => { });
@@ -1053,12 +1553,15 @@ function Register({ setTab, viewPass }) {
     try {
       const d = await api('/visitors/register', {
         method: 'POST',
-        body: JSON.stringify(form)
+        body: JSON.stringify({
+          ...form,
+          photo: photoPreview || form.photo || null
+        })
       });
       setOut(d);
-      setShowCamera(true);
-      setPhotoSaved(false);
-      setMsg('Visitor registered successfully! Demo OTP and Pass Code generated.');
+      setShowCamera(false);
+      setShowLogoAnim(true);
+      setMsg('Visitor registered successfully! Status: Awaiting Host Approval.');
     } catch (err) {
       setMsg('Error: ' + err.message);
     } finally {
@@ -1068,6 +1571,7 @@ function Register({ setTab, viewPass }) {
 
   return (
     <div className="panel" style={{ maxWidth: '840px', margin: '0 auto' }}>
+      {showLogoAnim && <LogoAnimationOverlay onComplete={() => setShowLogoAnim(false)} />}
       <div className="panel-header">
         <h3 className="panel-title">
           <Icons.Register /> Register New Visitor
@@ -1080,42 +1584,28 @@ function Register({ setTab, viewPass }) {
               <strong>{msg}</strong>
               {out && (
                 <div style={{ marginTop: '8px', fontSize: '13px' }}>
-                  <div><b>Visitor Code:</b> {out.visitorCode}</div>
-                  <div><b>Demo OTP:</b> <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 'bold', fontSize: '15px' }}>{out.otp}</span> (Use this or 123456 to verify)</div>
+                  <div><b>Visitor Code:</b> <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 'bold' }}>{out.visitorCode}</span></div>
+                  <div><b>Status:</b> <span className="badge badge-pending">AWAITING HOST APPROVAL</span></div>
                 </div>
               )}
             </div>
             {out && (
-              <div style={{ marginTop: '15px' }}>
-                {showCamera ? (
-                  <div style={{ padding: '15px', border: '1px solid var(--border-color)', borderRadius: '8px', backgroundColor: 'var(--bg-card-subtle)' }}>
-                    <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>Capture Visitor Photo (Mandatory)</h4>
-                    <WebcamCapture
-                      mandatory={true}
-                      onCapture={async (dataUrl) => {
-                        try {
-                          await api(`/visitors/${out.id}/photo`, {
-                            method: 'POST',
-                            body: JSON.stringify({ photo: dataUrl })
-                          });
-                          setPhotoSaved(true);
-                          setShowCamera(false);
-                          setMsg(prev => prev + ' Photo saved successfully.');
-                        } catch (err) {
-                          setMsg('Error saving photo: ' + err.message);
-                        }
-                      }}
-                      onCancel={() => setShowCamera(false)}
-                    />
-                  </div>
-                ) : (
-                  <button
-                    className="btn-primary"
-                    onClick={() => viewPass(out.visitId)}
-                  >
-                    View Digital Pass
-                  </button>
-                )}
+              <div style={{ marginTop: '12px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => viewPass(out.visitId)}
+                >
+                  View Digital Pass
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setShowLogoAnim(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <span>✨ Replay Logo Animation</span>
+                </button>
               </div>
             )}
           </div>
@@ -1271,13 +1761,30 @@ function Register({ setTab, viewPass }) {
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Vehicle Registration (Optional)</label>
-            <input
-              className="form-control"
-              placeholder="e.g. KA-02-AB-1234"
-              onChange={e => setField('vehicle', e.target.value)}
-            />
+          <div className="form-group full-width">
+            <label className="form-label">Visitor Photo (Optional)</label>
+            {photoPreview ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <img src={photoPreview} alt="Visitor Preview" style={{ width: '80px', height: '80px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--primary)' }} />
+                <button type="button" className="btn-secondary" onClick={() => setPhotoPreview(null)}>Retake Photo</button>
+              </div>
+            ) : showCamera ? (
+              <div style={{ padding: '15px', border: '1px solid var(--border-color)', borderRadius: '8px', backgroundColor: 'var(--bg-card-subtle)' }}>
+                <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>Capture Visitor Photo</h4>
+                <WebcamCapture
+                  mandatory={false}
+                  onCapture={(dataUrl) => {
+                    setPhotoPreview(dataUrl);
+                    setShowCamera(false);
+                  }}
+                  onCancel={() => setShowCamera(false)}
+                />
+              </div>
+            ) : (
+              <button type="button" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => setShowCamera(true)}>
+                📷 Snap Visitor Photo
+              </button>
+            )}
           </div>
 
           <div className="form-group full-width">
@@ -1293,7 +1800,7 @@ function Register({ setTab, viewPass }) {
 
           <div className="form-group full-width" style={{ marginTop: '10px' }}>
             <button type="submit" className="btn-primary" disabled={loading}>
-              {loading ? 'Registering...' : 'Submit'}
+              {loading ? 'Submitting Registration...' : 'Submit Visitor Registration'}
             </button>
           </div>
         </form>
@@ -1329,40 +1836,49 @@ function Visitors({ user, viewPass }) {
   const [editForm, setEditForm] = useState({});
   const [editMsg, setEditMsg] = useState('');
 
-  const load = () => {
+  const load = async () => {
     setLoading(true);
     let url = `/visitors?name=${encodeURIComponent(q)}`;
     if (statusFilter) url += `&status=${encodeURIComponent(statusFilter)}`;
-    api(url)
-      .then(setData)
-      .finally(() => setLoading(false));
+    try {
+      const d = await api(url);
+      setData(d || []);
+    } catch (e) {
+      setErr('Error loading visitors: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(load, [statusFilter]);
+  useEffect(() => { load(); }, [statusFilter]);
 
   useEffect(() => {
     api('/hosts').then(setHosts).catch(() => { });
     api('/master/purposes').then(setPurposes).catch(() => { });
   }, []);
 
-  const canGate = user && ['GUARD', 'RECEPTION', 'ADMIN'].includes(user.role);
+  const canGate = user && ['GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN'].includes(user.role);
+  const canEdit = user && ['GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN'].includes(user.role);
+  const canDelete = user && ['RECEPTION', 'ADMIN', 'SUPER_ADMIN'].includes(user.role);
 
   const doCheckIn = async (r) => {
-    if (!confirm(`Check in ${r.name} now?`)) return;
-    setBusyId(r.visit_id); setErr('');
+    const id = r.visit_id || r.id;
+    if (!id) return;
+    setBusyId(id); setErr('');
     try {
-      await api(`/visits/${r.visit_id}/entry`, { method: 'POST' });
-      load();
+      await api(`/visits/${id}/entry`, { method: 'POST' });
+      await load();
     } catch (e) { setErr('Error: ' + e.message); }
     finally { setBusyId(null); }
   };
 
   const doCheckOut = async (r) => {
-    if (!confirm(`Check out ${r.name} now?`)) return;
-    setBusyId(r.visit_id); setErr('');
+    const id = r.visit_id || r.id;
+    if (!id) return;
+    setBusyId(id); setErr('');
     try {
-      await api(`/visits/${r.visit_id}/exit`, { method: 'POST' });
-      load();
+      await api(`/visits/${id}/exit`, { method: 'POST' });
+      await load();
     } catch (e) { setErr('Error: ' + e.message); }
     finally { setBusyId(null); }
   };
@@ -1437,7 +1953,7 @@ function Visitors({ user, viewPass }) {
         </div>
 
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          {['', 'INSIDE', 'APPROVED', 'PENDING_APPROVAL', 'CLOSED'].map(s => (
+          {['', 'CHECKED_IN', 'APPROVED', 'PENDING_APPROVAL', 'CLOSED'].map(s => (
             <button
               key={s}
               className={`btn-secondary ${statusFilter === s ? 'btn-primary' : ''}`}
@@ -1510,7 +2026,7 @@ function Visitors({ user, viewPass }) {
                           {busyId === r.visit_id ? '...' : 'Check In'}
                         </button>
                       )}
-                      {canGate && r.status === 'INSIDE' && (
+                      {canGate && (r.status === 'INSIDE' || r.status === 'CHECKED_IN') && (
                         <button
                           className="btn-secondary"
                           style={{ padding: '6px 10px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }}
@@ -1520,25 +2036,25 @@ function Visitors({ user, viewPass }) {
                           {busyId === r.visit_id ? '...' : 'Check Out'}
                         </button>
                       )}
-                      {canGate && (
-                        <>
-                          <button
-                            className="btn-secondary"
-                            style={{ padding: '6px 10px', fontSize: '12px' }}
-                            disabled={busyId === r.visit_id}
-                            onClick={() => openEdit(r)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="btn-secondary"
-                            style={{ padding: '6px 10px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }}
-                            disabled={busyId === r.visit_id}
-                            onClick={() => doDelete(r)}
-                          >
-                            Delete
-                          </button>
-                        </>
+                      {canEdit && (
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '12px' }}
+                          disabled={busyId === r.visit_id}
+                          onClick={() => openEdit(r)}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }}
+                          disabled={busyId === r.visit_id}
+                          onClick={() => doDelete(r)}
+                        >
+                          Delete
+                        </button>
                       )}
                     </div>
                   </td>
@@ -1625,6 +2141,12 @@ function Approvals({ user, refreshPending }) {
   const [msg, setMsg] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Modals for Propose Time and Reject Reason
+  const [proposeTarget, setProposeTarget] = useState(null);
+  const [proposedTime, setProposedTime] = useState('');
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+
   const load = () => {
     setLoading(true);
     api('/approvals')
@@ -1634,17 +2156,25 @@ function Approvals({ user, refreshPending }) {
 
   useEffect(load, []);
 
-  const act = async (visitId, action) => {
+  const handleHostAction = async (visitId, action, extra = {}) => {
+    setLoading(true);
+    setMsg('');
     try {
-      await api('/approvals/' + visitId, {
+      const res = await api(`/visits/${visitId}/host-action`, {
         method: 'POST',
-        body: JSON.stringify({ action })
+        body: JSON.stringify({ action, ...extra })
       });
-      setMsg(`Visit successfully ${action === 'APPROVE' ? 'Approved' : 'Declined'}`);
+      setMsg(res.message);
+      setProposeTarget(null);
+      setRejectTarget(null);
+      setProposedTime('');
+      setRejectionReason('');
       load();
       if (refreshPending) refreshPending();
     } catch (e) {
       setMsg('Error: ' + e.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1652,12 +2182,12 @@ function Approvals({ user, refreshPending }) {
     <div className="panel">
       <div className="panel-header">
         <h3 className="panel-title">
-          <Icons.Approvals /> Host Access Approvals
+          <Icons.Approvals /> Host Access Approvals & Pre-Approvals
         </h3>
         <button className="btn-secondary" onClick={load}>Refresh</button>
       </div>
       <div className="panel-body">
-        {msg && <div className="alert-box alert-success">{msg}</div>}
+        {msg && <div className={`alert-box ${msg.startsWith('Error') ? 'alert-error' : 'alert-success'}`}><strong>{msg}</strong></div>}
 
         <div className="table-container" style={{ border: 'none', boxShadow: 'none' }}>
           <table className="custom-table">
@@ -1667,15 +2197,17 @@ function Approvals({ user, refreshPending }) {
                 <th>Company</th>
                 <th>Purpose</th>
                 <th>Host</th>
+                <th>Expected Arrival</th>
+                <th>Source</th>
                 <th>Status</th>
                 <th>Decision Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px' }}>Loading approvals...</td></tr>
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px' }}>Loading approvals...</td></tr>
               ) : approvals.length === 0 ? (
-                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No pending approval requests.</td></tr>
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No pending approval requests.</td></tr>
               ) : (
                 approvals.map(a => (
                   <tr key={a.id}>
@@ -1686,19 +2218,36 @@ function Approvals({ user, refreshPending }) {
                     <td>{a.company || 'Individual'}</td>
                     <td>{a.purpose}</td>
                     <td>{a.host_name}</td>
-                    <td><StatusBadge status={a.status} /></td>
+                    <td>{a.expected_arrival_time ? new Date(a.expected_arrival_time).toLocaleString() : '-'}</td>
                     <td>
-                      {a.status === 'PENDING' ? (
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button className="btn-success" onClick={() => act(a.visit_id, 'APPROVE')}>
-                            Approve
-                          </button>
-                          <button className="btn-danger" onClick={() => act(a.visit_id, 'DECLINE')}>
-                            Decline
-                          </button>
-                        </div>
+                      <span className="badge badge-inside" style={{ fontSize: '11px' }}>
+                        {a.initiator_type === 'STAFF_CREATED' ? 'Staff Pre-Pass' : 'Self-Registered'}
+                      </span>
+                    </td>
+                    <td><StatusBadge status={a.visit_status || a.status} /></td>
+                    <td>
+                      {['PENDING', 'PENDING_HOST_REVIEW'].includes(a.visit_status || a.status) ? (
+                        (user && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN' || a.host_id === user.id)) ? (
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            <button className="btn-primary" style={{ padding: '6px 10px', fontSize: '12px', backgroundColor: '#059669' }} onClick={() => handleHostAction(a.visit_id, 'APPROVE')}>
+                              Single-Tap Approve
+                            </button>
+                            <button className="btn-secondary" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => setProposeTarget(a)}>
+                              📅 Propose Time
+                            </button>
+                            <button className="btn-secondary" style={{ padding: '6px 10px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }} onClick={() => setRejectTarget(a)}>
+                              ❌ Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="badge badge-pending" style={{ fontSize: '11px' }}>
+                            Awaiting Host Review ({a.host_name || 'Host'})
+                          </span>
+                        )
                       ) : (
-                        <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: '600' }}>Completed</span>
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: '600' }}>
+                          {a.rejection_reason ? `Rejected: ${a.rejection_reason}` : 'Completed'}
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -1708,6 +2257,77 @@ function Approvals({ user, refreshPending }) {
           </table>
         </div>
       </div>
+
+      {/* Propose Counter Time Modal */}
+      {proposeTarget && (
+        <div className="modal-overlay" onClick={() => setProposeTarget(null)}>
+          <div className="pass-card" style={{ maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
+            <div className="pass-header">
+              <h3>Propose Rescheduled Arrival Time</h3>
+              <p>For visitor: {proposeTarget.visitor_name}</p>
+            </div>
+            <div className="pass-body">
+              <div className="form-group">
+                <label className="form-label">Select New Arrival Date & Time <span className="req">*</span></label>
+                <input
+                  type="datetime-local"
+                  className="form-control"
+                  value={proposedTime}
+                  onChange={e => setProposedTime(e.target.value)}
+                  required
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+                <button
+                  className="btn-primary"
+                  style={{ flex: 1 }}
+                  disabled={!proposedTime}
+                  onClick={() => handleHostAction(proposeTarget.visit_id, 'PROPOSE_TIME', { proposed_time: proposedTime })}
+                >
+                  Send Counter Proposal
+                </button>
+                <button className="btn-secondary" onClick={() => setProposeTarget(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reject Modal with Mandatory Reason */}
+      {rejectTarget && (
+        <div className="modal-overlay" onClick={() => setRejectTarget(null)}>
+          <div className="pass-card" style={{ maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
+            <div className="pass-header" style={{ background: 'linear-gradient(135deg, #dc2626 0%, #ef4444 100%)' }}>
+              <h3>Reject Visit Request</h3>
+              <p>Mandatory rejection reason required</p>
+            </div>
+            <div className="pass-body">
+              <div className="form-group">
+                <label className="form-label">Rejection Reason <span className="req">*</span></label>
+                <textarea
+                  className="form-control"
+                  rows="3"
+                  placeholder="e.g. Host unavailable, meeting rescheduled, policy restriction..."
+                  value={rejectionReason}
+                  onChange={e => setRejectionReason(e.target.value)}
+                  required
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+                <button
+                  className="btn-primary"
+                  style={{ flex: 1, backgroundColor: '#dc2626' }}
+                  disabled={!rejectionReason.trim()}
+                  onClick={() => handleHostAction(rejectTarget.visit_id, 'REJECT', { notes: rejectionReason.trim() })}
+                >
+                  Confirm Rejection
+                </button>
+                <button className="btn-secondary" onClick={() => setRejectTarget(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2441,6 +3061,314 @@ function MasterData() {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================= ROLE-SCOPED HELP & USER GUIDE =================
+function HelpGuide({ user, setTab }) {
+  const role = user.role;
+  const isHost = role === 'HOST' || role === 'EMPLOYEE';
+  const isGuard = role === 'GUARD' || role === 'RECEPTION';
+  const isCeo = role === 'CEO';
+  const isAdmin = role === 'ADMIN' || role === 'SUPER_ADMIN';
+
+  const roleLabels = {
+    HOST: 'Host / Employee',
+    EMPLOYEE: 'Host / Employee',
+    GUARD: 'Security Guard / Gatekeeper',
+    RECEPTION: 'Reception Desk Manager',
+    CEO: 'Chief Executive Officer (CEO)',
+    ADMIN: 'System Administrator',
+    SUPER_ADMIN: 'Super Administrator'
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {/* Hero Welcome Box */}
+      <div className="panel" style={{ background: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)', color: '#fff', border: 'none', padding: '32px', borderRadius: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.2)', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '700', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              <span>👤 Role-Tailored Guide:</span> {roleLabels[role] || role}
+            </div>
+            <h2 style={{ margin: '0 0 8px 0', fontSize: '24px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <img src="/swagatham_text_white.png" alt="Swagatham" style={{ height: '32px', width: 'auto', objectFit: 'contain' }} /> VMS User & Workflow Guide
+            </h2>
+            <p style={{ margin: 0, opacity: 0.9, fontSize: '14px', maxWidth: '680px', lineHeight: 1.5 }}>
+              Welcome <strong>{user.name}</strong>. This guide explains how to register visitors, approve passes, manage gate access, and track security operations for your specific account level.
+            </p>
+          </div>
+          <div style={{ background: 'rgba(255,255,255,0.15)', padding: '16px 20px', borderRadius: '12px', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.2)' }}>
+            <div style={{ fontSize: '11px', opacity: '0.8', textTransform: 'uppercase', fontWeight: '700' }}>Active Workspace Account</div>
+            <div style={{ fontSize: '15px', fontWeight: '800', marginTop: '2px' }}>{user.name}</div>
+            <div style={{ fontSize: '12px', opacity: '0.9' }}>{user.department || 'General'} Department</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Visual Access Lifecycle Overview (For All Roles) */}
+      <div className="panel">
+        <div className="panel-header">
+          <h3 className="panel-title">
+            <span style={{ fontSize: '18px' }}>🔄</span> Enterprise Visitor Access Lifecycle
+          </h3>
+        </div>
+        <div className="panel-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '16px', textAlign: 'center' }}>
+            <div style={{ background: 'var(--bg-card-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '24px', marginBottom: '6px' }}>📝</div>
+              <div style={{ fontWeight: '700', fontSize: '13px', color: 'var(--primary)' }}>1. Registration</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Visitor registers at Reception, Public Portal, or Host Pre-Pass</div>
+            </div>
+            <div style={{ background: 'var(--bg-card-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '24px', marginBottom: '6px' }}>🔔</div>
+              <div style={{ fontWeight: '700', fontSize: '13px', color: '#f59e0b' }}>2. Host Alert</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Host receives Bell alert, Sound chime & Toast banner</div>
+            </div>
+            <div style={{ background: 'var(--bg-card-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '24px', marginBottom: '6px' }}>✅</div>
+              <div style={{ fontWeight: '700', fontSize: '13px', color: '#059669' }}>3. Decision</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Host Single-Tap Approves, Proposes Time, or Rejects</div>
+            </div>
+            <div style={{ background: 'var(--bg-card-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '24px', marginBottom: '6px' }}>🚪</div>
+              <div style={{ fontWeight: '700', fontSize: '13px', color: '#2563eb' }}>4. Gate Check-In</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Security verifies Pass Code/QR and taps Check In</div>
+            </div>
+            <div style={{ background: 'var(--bg-card-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '24px', marginBottom: '6px' }}>🏃</div>
+              <div style={{ fontWeight: '700', fontSize: '13px', color: '#64748b' }}>5. Gate Check-Out</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Visitor exits; audit trail logs departure time</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Role-Specific Detailed Instructions */}
+
+      {/* ================= HOST / EMPLOYEE GUIDE ================= */}
+      {(isHost || isAdmin || isCeo) && (
+        <div className="panel">
+          <div className="panel-header" style={{ background: 'var(--bg-card-subtle)' }}>
+            <h3 className="panel-title">
+              <span style={{ fontSize: '20px' }}>👔</span> Host & Employee Guide — Reviewing & Pre-Approving Visits
+            </h3>
+            <span className="badge badge-inside">Host Scope</span>
+          </div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                1. How to Handle Incoming Visitor Notifications
+              </h4>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 0 12px 0', lineHeight: 1.5 }}>
+                When a visitor registers at reception to meet you, you will receive an instant notification in 3 ways:
+              </p>
+              <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li><strong>Header Bell Dropdown:</strong> Red badge indicator in the top navbar bell.</li>
+                <li><strong>Sound Chime:</strong> Audio tone alerting you to the new visitor request.</li>
+                <li><strong>Live Toast Banner:</strong> Pop-up box on top right with direct action buttons.</li>
+              </ul>
+              <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '12px 16px', borderRadius: '8px', marginTop: '14px', fontSize: '12px', color: '#065f46' }}>
+                💡 <strong>Direct Action:</strong> You do NOT have to leave your current page! You can click <strong>Single-Tap Approve</strong>, <strong>Propose Time</strong>, or <strong>Reject</strong> directly inside the Bell Dropdown or Toast Banner.
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                2. The Three Host Decision Options
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginTop: '12px' }}>
+                <div style={{ border: '1px solid #a7f3d0', background: '#f0fdf4', padding: '14px', borderRadius: '10px' }}>
+                  <div style={{ fontWeight: '700', color: '#15803d', fontSize: '13px', marginBottom: '4px' }}>✅ Single-Tap Approve</div>
+                  <div style={{ fontSize: '12px', color: '#166534' }}>Immediately approves the pass, sends email with Pass QR to visitor, and notifies Security Guard at gate.</div>
+                </div>
+                <div style={{ border: '1px solid #fde68a', background: '#fffbeb', padding: '14px', borderRadius: '10px' }}>
+                  <div style={{ fontWeight: '700', color: '#b45309', fontSize: '13px', marginBottom: '4px' }}>📅 Propose New Time</div>
+                  <div style={{ fontSize: '12px', color: '#92400e' }}>Sends a counter-proposal date & time link to the visitor's email for single-click acceptance.</div>
+                </div>
+                <div style={{ border: '1px solid #fecaca', background: '#fef2f2', padding: '14px', borderRadius: '10px' }}>
+                  <div style={{ fontWeight: '700', color: '#b91c1c', fontSize: '13px', marginBottom: '4px' }}>❌ Reject Request</div>
+                  <div style={{ fontSize: '12px', color: '#991b1b' }}>Declines entry. Requires a mandatory reason (e.g. host unavailable/meeting cancelled).</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                3. Pre-Issuing Guest Passes for Expected Visitors
+              </h4>
+              <ol style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li>Click <strong>Visitor Registration</strong> on the left sidebar.</li>
+                <li>Enter visitor name, 10-digit mobile number, and visit purpose.</li>
+                <li>Select expected arrival & departure time.</li>
+                <li>Submit: Because you are creating the pass for yourself, the pass is <strong>Auto-Approved</strong> and ready for gate entry!</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= GUARD / RECEPTION GUIDE ================= */}
+      {(isGuard || isAdmin || isCeo) && (
+        <div className="panel">
+          <div className="panel-header" style={{ background: 'var(--bg-card-subtle)' }}>
+            <h3 className="panel-title">
+              <span style={{ fontSize: '20px' }}>🛡️</span> Guard & Reception Guide — Walk-in Registration & Gate Access
+            </h3>
+            <span className="badge badge-inside">Gate Security Scope</span>
+          </div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                1. How to Register Walk-In Visitors at Reception
+              </h4>
+              <ol style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li>Go to the <strong>Visitor Registration</strong> tab on the left sidebar.</li>
+                <li>Fill in the mandatory details: <strong>Full Name</strong>, <strong>10-digit Mobile Number</strong>, <strong>Host (Person to Meet)</strong>, and <strong>Purpose</strong>.</li>
+                <li>Select the expected <strong>Check-In</strong> and <strong>Check-Out</strong> date and time.</li>
+                <li>(Optional) Click <strong>📸 Snap Photo</strong> to capture a webcam photograph of the visitor.</li>
+                <li>Click <strong>Register Visitor</strong>. The visitor status will set to <span className="badge badge-pending">PENDING HOST REVIEW</span>, and an alert will instantly ping the host.</li>
+              </ol>
+            </div>
+
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                2. Performing Gate Check-In (`CHECKED_IN`)
+              </h4>
+              <ol style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li>When the visitor arrives at the gate, request their <strong>Pass Code</strong> (e.g. <code>VAMS-XYZ123</code>) or scan their digital QR badge.</li>
+                <li>Go to <strong>Visitor Directory</strong>. Filter status by <strong>Approved</strong>.</li>
+                <li>Click the green <strong>Check In</strong> button.</li>
+                <li>The system sets the visitor to <span className="badge badge-inside">INSIDE</span> and automatically notifies the host that their visitor has arrived!</li>
+              </ol>
+            </div>
+
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                3. Performing Gate Check-Out (`CHECKED_OUT`)
+              </h4>
+              <ol style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li>When the visitor leaves the building, locate their record in <strong>Visitor Directory</strong>.</li>
+                <li>Click the red <strong>Check Out</strong> button.</li>
+                <li>The system records the departure timestamp and completes the visit lifecycle.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= CEO / EXECUTIVE GUIDE ================= */}
+      {(isCeo || isAdmin) && (
+        <div className="panel">
+          <div className="panel-header" style={{ background: 'var(--bg-card-subtle)' }}>
+            <h3 className="panel-title">
+              <span style={{ fontSize: '20px' }}>👑</span> Executive Guide — Governance, VIP Approvals & Security Audit
+            </h3>
+            <span className="badge badge-inside">Executive Scope</span>
+          </div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                1. Executive Oversight & VIP Guest Approvals
+              </h4>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+                As CEO, you have access to executive pre-approvals, facility analytics, and security audit logs. You can single-tap approve VIP visitors assigned to the Executive office or inspect all pending host approvals across the organisation.
+              </p>
+            </div>
+
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                2. Visual Analytics & Security Audit Trail
+              </h4>
+              <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li><strong>Reports & Analytics:</strong> Interactive pie and bar charts breakdown visitors by status, department, and purpose.</li>
+                <li><strong>Digital Audit Trail:</strong> Complete real-time audit log of every pass registration, host decision, gate scan, and system state change.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= ADMINISTRATOR GUIDE ================= */}
+      {isAdmin && (
+        <div className="panel">
+          <div className="panel-header" style={{ background: 'var(--bg-card-subtle)' }}>
+            <h3 className="panel-title">
+              <span style={{ fontSize: '20px' }}>⚙️</span> Administrator Guide — System Master Data & SMTP Setup
+            </h3>
+            <span className="badge badge-inside">System Admin Scope</span>
+          </div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                1. Master Data Configuration
+              </h4>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 0 10px 0', lineHeight: 1.5 }}>
+                Navigate to <strong>Master Data</strong> on the left sidebar to add, edit, or toggle:
+              </p>
+              <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li><strong>Departments:</strong> Department codes and active facility units.</li>
+                <li><strong>Visit Purposes:</strong> Master list of valid entry reasons.</li>
+                <li><strong>People to Meet (Hosts):</strong> Staff accounts available for visitor assignment.</li>
+              </ul>
+            </div>
+
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
+              <h4 style={{ margin: '0 0 10px 0', color: 'var(--primary)', fontSize: '15px' }}>
+                2. Google Workspace SMTP Email Configuration
+              </h4>
+              <ol style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.6 }}>
+                <li>Click the <strong>SMTP</strong> button in the top header bar.</li>
+                <li>Enter Google Workspace SMTP settings (Host: <code>smtp.gmail.com</code>, Port: <code>465</code>).</li>
+                <li>Provide Google Workspace email address and 16-character <strong>App Password</strong>.</li>
+                <li>Click <strong>🧪 Send Test Email</strong> to verify automated email dispatch to hosts and visitors.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Role-tailored FAQ Accordion */}
+      <div className="panel">
+        <div className="panel-header">
+          <h3 className="panel-title">
+            <span style={{ fontSize: '18px' }}>❓</span> Frequently Asked Questions ({roleLabels[role] || role})
+          </h3>
+        </div>
+        <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {(isHost || isAdmin || isCeo) && (
+            <div style={{ background: 'var(--bg-card-subtle)', padding: '14px 18px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontWeight: '700', fontSize: '13px', color: 'var(--text-main)', marginBottom: '4px' }}>
+                Q: What happens if I miss a visitor notification chime?
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                A: All pending requests stay safely in your <strong>Host Approvals</strong> tab and your <strong>Notifications Bell</strong> menu. You can review and approve them at any time.
+              </div>
+            </div>
+          )}
+
+          {(isGuard || isAdmin) && (
+            <div style={{ background: 'var(--bg-card-subtle)', padding: '14px 18px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontWeight: '700', fontSize: '13px', color: 'var(--text-main)', marginBottom: '4px' }}>
+                Q: Can a security guard check in a visitor without host approval?
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                A: No. The VAMS security protocol mandates that the visit status must be <code>APPROVED</code> before the <strong>Check In</strong> button becomes active.
+              </div>
+            </div>
+          )}
+
+          <div style={{ background: 'var(--bg-card-subtle)', padding: '14px 18px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+            <div style={{ fontWeight: '700', fontSize: '13px', color: 'var(--text-main)', marginBottom: '4px' }}>
+              Q: Is webcam photo capture compulsory?
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              A: Webcam photo capture is optional for standard visits but recommended for enhanced facility security compliance.
+            </div>
+          </div>
         </div>
       </div>
     </div>
