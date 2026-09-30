@@ -15,7 +15,17 @@ async function api(path, opt = {}) {
     }
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw Error(d.message || 'Request failed');
+  if (!r.ok) {
+    if (r.status === 401 && token) {
+      console.warn('[VAMS AUTH] Session token expired or unauthorized. Clearing stored credentials.');
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      if (!window.location.search.includes('logout')) {
+        window.location.href = '/?logout=true&expired=true';
+      }
+    }
+    throw Error(d.message || 'Request failed');
+  }
   return d;
 }
 
@@ -163,6 +173,8 @@ function LogoAnimationOverlay({ onComplete }) {
 // Digital Pass Modal Component
 function PassModal({ passData, onClose }) {
   if (!passData) return null;
+  const isPreIssue = passData.initiator_type === 'STAFF_CREATED' || passData.is_preissue;
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="pass-card" onClick={e => e.stopPropagation()}>
@@ -204,18 +216,37 @@ function PassModal({ passData, onClose }) {
               <span>Status</span>
               <StatusBadge status={passData.status} />
             </div>
-            <div className="pass-detail-item">
-              <span>Expected Check-in</span>
-              <span>{passData.expected_checkin ? new Date(passData.expected_checkin).toLocaleString() : '—'}</span>
-            </div>
-            <div className="pass-detail-item">
-              <span>Expected Check-out</span>
-              <span>{passData.expected_checkout ? new Date(passData.expected_checkout).toLocaleString() : '—'}</span>
-            </div>
-            <div className="pass-detail-item">
-              <span>Pass Valid Until</span>
-              <span>{passData.valid_until ? new Date(passData.valid_until).toLocaleString() : '—'}</span>
-            </div>
+
+            {passData.entry_time ? (
+              <div className="pass-detail-item">
+                <span>Check-in Time</span>
+                <span>{fmtDateTime(passData.entry_time)}</span>
+              </div>
+            ) : isPreIssue && passData.expected_checkin ? (
+              <div className="pass-detail-item">
+                <span>Expected Check-in</span>
+                <span>{fmtDateTime(passData.expected_checkin)}</span>
+              </div>
+            ) : null}
+
+            {passData.exit_time ? (
+              <div className="pass-detail-item">
+                <span>Check-out Time</span>
+                <span>{fmtDateTime(passData.exit_time)}</span>
+              </div>
+            ) : isPreIssue && passData.expected_checkout ? (
+              <div className="pass-detail-item">
+                <span>Expected Check-out</span>
+                <span>{fmtDateTime(passData.expected_checkout)}</span>
+              </div>
+            ) : null}
+
+            {passData.valid_until && (
+              <div className="pass-detail-item">
+                <span>Pass Valid Until</span>
+                <span>{fmtDateTime(passData.valid_until)}</span>
+              </div>
+            )}
           </div>
           <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
             <button className="btn-primary" style={{ flex: 1 }} onClick={() => window.print()}>
@@ -891,10 +922,25 @@ function Shell({ user, setUser, logout }) {
           if (newest) {
             setToastAlert(newest);
             setTimeout(() => setToastAlert(null), 6000);
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(newest.title || 'Swagatham Notification', {
+                  body: newest.message,
+                  icon: '/logo.png'
+                });
+              } catch (e) { }
+            }
           }
         }
         lastNotifCountRef.current = unread;
         setUnreadCount(unread);
+
+        // Update WebAPK App Icon Badge (like WhatsApp app icon badge on mobile home screen)
+        if (unread > 0) {
+          if ('setAppBadge' in navigator) navigator.setAppBadge(unread).catch(() => { });
+        } else {
+          if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => { });
+        }
       })
       .catch(() => { });
   };
@@ -902,8 +948,10 @@ function Shell({ user, setUser, logout }) {
   const refreshPending = () => {
     api('/approvals')
       .then(res => {
-        const p = res.filter(x => x.status === 'PENDING').length;
-        setPendingCount(p);
+        if (Array.isArray(res)) {
+          const p = res.filter(x => x.status === 'PENDING').length;
+          setPendingCount(p);
+        }
       })
       .catch(() => { });
   };
@@ -921,6 +969,7 @@ function Shell({ user, setUser, logout }) {
   const markAllNotifsRead = async () => {
     try {
       await api('/notifications/read-all', { method: 'PUT' });
+      if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => { });
       fetchNotifications();
     } catch (e) { }
   };
@@ -1512,7 +1561,7 @@ function Register({ user, setTab, viewPass }) {
   const [hosts, setHosts] = useState([]);
   const [form, setForm] = useState(() => ({
     consent: true,
-    host_id: (user && (user.role === 'HOST' || user.role === 'EMPLOYEE')) ? user.id : ''
+    host_id: (user && (user.role === 'HOST' || user.role === 'EMPLOYEE' || user.role === 'CEO')) ? user.id : ''
   }));
   const [out, setOut] = useState(null);
   const [msg, setMsg] = useState('');
@@ -1540,11 +1589,7 @@ function Register({ user, setTab, viewPass }) {
       setMsg('Error: Mobile number must be exactly 10 digits');
       return;
     }
-    if (!form.expected_checkin || !form.expected_checkout) {
-      setMsg('Error: Expected check-in and check-out time are required');
-      return;
-    }
-    if (new Date(form.expected_checkout) <= new Date(form.expected_checkin)) {
+    if (form.expected_checkin && form.expected_checkout && new Date(form.expected_checkout) <= new Date(form.expected_checkin)) {
       setMsg('Error: Check-out time must be later than check-in time');
       return;
     }
@@ -1740,9 +1785,8 @@ function Register({ user, setTab, viewPass }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Check-in Time <span className="req">*</span></label>
+            <label className="form-label">Expected Check-in Time <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
             <input
-              required
               type="datetime-local"
               className="form-control"
               value={form.expected_checkin || ''}
@@ -1751,9 +1795,8 @@ function Register({ user, setTab, viewPass }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label"> Check-out Time <span className="req">*</span></label>
+            <label className="form-label">Expected Check-out Time <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
             <input
-              required
               type="datetime-local"
               className="form-control"
               value={form.expected_checkout || ''}
@@ -1909,8 +1952,7 @@ function Visitors({ user, viewPass }) {
 
   const saveEdit = async () => {
     if (!/^\d{10}$/.test(editForm.mobile || '')) { setEditMsg('Mobile number must be exactly 10 digits'); return; }
-    if (!editForm.expected_checkin || !editForm.expected_checkout) { setEditMsg('Expected check-in and check-out time are required'); return; }
-    if (new Date(editForm.expected_checkout) <= new Date(editForm.expected_checkin)) { setEditMsg('Check-out time must be later than check-in time'); return; }
+    if (editForm.expected_checkin && editForm.expected_checkout && new Date(editForm.expected_checkout) <= new Date(editForm.expected_checkin)) { setEditMsg('Check-out time must be later than check-in time'); return; }
     setBusyId(editRow.visit_id); setEditMsg(''); setErr('');
     try {
       await api(`/visitors/${editRow.id}`, {
@@ -2115,11 +2157,11 @@ function Visitors({ user, viewPass }) {
                   <input className="form-control" value={editForm.vehicle || ''} onChange={e => setEdit('vehicle', e.target.value)} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Expected Check-in <span className="req">*</span></label>
+                  <label className="form-label">Expected Check-in <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
                   <input type="datetime-local" className="form-control" value={editForm.expected_checkin || ''} onChange={e => setEdit('expected_checkin', e.target.value)} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Expected Check-out <span className="req">*</span></label>
+                  <label className="form-label">Expected Check-out <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
                   <input type="datetime-local" className="form-control" value={editForm.expected_checkout || ''} onChange={e => setEdit('expected_checkout', e.target.value)} />
                 </div>
               </div>
@@ -2218,7 +2260,7 @@ function Approvals({ user, refreshPending }) {
                     <td>{a.company || 'Individual'}</td>
                     <td>{a.purpose}</td>
                     <td>{a.host_name}</td>
-                    <td>{a.expected_arrival_time ? new Date(a.expected_arrival_time).toLocaleString() : '-'}</td>
+                    <td>{a.expected_arrival_time ? fmtDateTime(a.expected_arrival_time) : '-'}</td>
                     <td>
                       <span className="badge badge-inside" style={{ fontSize: '11px' }}>
                         {a.initiator_type === 'STAFF_CREATED' ? 'Staff Pre-Pass' : 'Self-Registered'}
@@ -2899,29 +2941,42 @@ function MasterData() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState('');
+  const [createdInfo, setCreatedInfo] = useState(null);
   const [editId, setEditId] = useState(null);
+  const [roleFilter, setRoleFilter] = useState('ALL');
   const [form, setForm] = useState({});
 
+  const [departmentsList, setDepartmentsList] = useState([]);
+
+  useEffect(() => {
+    api('/master/departments').then(setDepartmentsList).catch(() => []);
+  }, []);
   const isDept = tab === 'departments';
   const isHost = tab === 'hosts';
-  const entity = isDept ? 'Department' : isHost ? 'Host / Person to Meet' : 'Purpose';
+  const entity = isDept ? 'Department' : isHost ? 'System User / Host' : 'Purpose';
 
-  const resetForm = () => setForm(isHost ? { name: '', department: '', active: true } : isDept ? { name: '', code: '', description: '', active: true } : { name: '', description: '', active: true });
+  const resetForm = () => setForm(isHost
+    ? { name: '', role: 'HOST', email: '', username: '', password: '', department: '', phone: '', active: true }
+    : isDept
+      ? { name: '', code: '', description: '', active: true }
+      : { name: '', description: '', active: true }
+  );
 
   const load = () => {
     setLoading(true);
-    api(`/master/${tab}/all`)
+    const endpoint = isHost ? '/master/users/all' : `/master/${tab}/all`;
+    api(endpoint)
       .then(setItems)
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { resetForm(); load(); setEditId(null); }, [tab]);
+  useEffect(() => { resetForm(); load(); setEditId(null); setMsg(''); setCreatedInfo(null); }, [tab]);
 
   const setField = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
   const toBody = () => isHost
-    ? { name: form.name, department: form.department, active: form.active }
+    ? { name: form.name, role: form.role || 'HOST', email: form.email, username: form.username, password: form.password, department: form.department, phone: form.phone, active: form.active }
     : isDept
       ? { name: form.name, code: form.code, description: form.description, active: form.active }
       : { name: form.name, description: form.description, active: form.active };
@@ -2931,11 +2986,33 @@ function MasterData() {
     if (editId) return saveEdit();
     submitAdd(e);
   };
+
+  const copyCredentials = (username, password, name, role, email) => {
+    const text = `Welcome to Swagatham VAMS!\nHere are your account login details:\n\nName: ${name}\nRole: ${role}\nUsername: ${username}\nEmail: ${email || '-'}\nPassword: ${password || '(As configured)'}\nPortal URL: ${window.location.origin}`;
+    navigator.clipboard.writeText(text).then(() => {
+      alert('📋 Login details copied to clipboard!\n\n' + text);
+    }).catch(() => {
+      alert('Login details:\n\n' + text);
+    });
+  };
+
   const submitAdd = async (e) => {
-    if (!form.name) return setMsg('Name is required');
+    if (!form.name || !form.name.trim()) return setMsg('Error: Name is required');
+    setMsg('');
+    setCreatedInfo(null);
     try {
-      await api(`/master/${tab}`, { method: 'POST', body: JSON.stringify(toBody()) });
-      setMsg(`${entity} added`);
+      const endpoint = isHost ? '/master/users' : `/master/${tab}`;
+      const res = await api(endpoint, { method: 'POST', body: JSON.stringify(toBody()) });
+      setMsg(`${entity} added successfully`);
+      if (isHost && res.username) {
+        setCreatedInfo({
+          name: form.name,
+          role: form.role || 'HOST',
+          username: res.username,
+          password: res.initialPassword || form.password,
+          email: form.email
+        });
+      }
       resetForm();
       load();
     } catch (err) { setMsg('Error: ' + err.message); }
@@ -2943,14 +3020,21 @@ function MasterData() {
 
   const startEdit = (item) => {
     setEditId(item.id);
-    setForm(isHost ? { name: item.name, department: item.department || '', active: !!item.active } : isDept ? { name: item.name, code: item.code || '', description: item.description || '', active: !!item.active } : { name: item.name, description: item.description || '', active: !!item.active });
+    setCreatedInfo(null);
+    setForm(isHost
+      ? { name: item.name, role: item.role || 'HOST', email: item.email || '', username: item.username || '', password: '', department: item.department || '', phone: item.phone || '', active: !!item.active }
+      : isDept
+        ? { name: item.name, code: item.code || '', description: item.description || '', active: !!item.active }
+        : { name: item.name, description: item.description || '', active: !!item.active }
+    );
   };
 
   const saveEdit = async () => {
-    if (!form.name) return setMsg('Name is required');
+    if (!form.name || !form.name.trim()) return setMsg('Error: Name is required');
     try {
-      await api(`/master/${tab}/${editId}`, { method: 'PUT', body: JSON.stringify(toBody()) });
-      setMsg(`${entity} updated`);
+      const endpoint = isHost ? `/master/users/${editId}` : `/master/${tab}/${editId}`;
+      await api(endpoint, { method: 'PUT', body: JSON.stringify(toBody()) });
+      setMsg(`${entity} updated successfully`);
       setEditId(null);
       resetForm();
       load();
@@ -2958,29 +3042,58 @@ function MasterData() {
   };
 
   const remove = async (id) => {
-    if (!confirm(`Remove this ${entity.toLowerCase()}?`)) return;
+    if (!confirm(`Deactivate this ${entity.toLowerCase()}?`)) return;
     try {
-      await api(`/master/${tab}/${id}`, { method: 'DELETE' });
-      setMsg(`${entity} removed`);
+      const endpoint = isHost ? `/master/users/${id}` : `/master/${tab}/${id}`;
+      await api(endpoint, { method: 'DELETE' });
+      setMsg(`${entity} deactivated`);
       load();
     } catch (err) { setMsg('Error: ' + err.message); }
   };
+
+  const filteredItems = isHost && roleFilter !== 'ALL'
+    ? items.filter(it => it.role === roleFilter)
+    : items;
 
   return (
     <div className="panel">
       <div className="panel-header">
         <h3 className="panel-title">
-          <Icons.MasterData /> Master Data Management
+          <Icons.MasterData /> Master Data & User Management
         </h3>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' }}>
           <button className={`nav-item ${tab === 'departments' ? 'active' : ''}`} style={{ height: '32px', padding: '0 12px', fontSize: '13px' }} onClick={() => setTab('departments')}>Departments</button>
           <button className={`nav-item ${tab === 'purposes' ? 'active' : ''}`} style={{ height: '32px', padding: '0 12px', fontSize: '13px' }} onClick={() => setTab('purposes')}>Visit Purposes</button>
-          <button className={`nav-item ${tab === 'hosts' ? 'active' : ''}`} style={{ height: '32px', padding: '0 12px', fontSize: '13px' }} onClick={() => setTab('hosts')}>People to Meet (Hosts)</button>
+          <button className={`nav-item ${tab === 'hosts' ? 'active' : ''}`} style={{ height: '32px', padding: '0 12px', fontSize: '13px' }} onClick={() => setTab('hosts')}>System Users & Hosts (All Roles)</button>
         </div>
       </div>
 
       <div className="panel-body">
         {msg && <div className={`alert-box ${msg.startsWith('Error') ? 'alert-error' : 'alert-success'}`}><strong>{msg}</strong></div>}
+
+        {createdInfo && (
+          <div style={{ background: 'var(--bg-card)', border: '2px solid #22c55e', borderRadius: '12px', padding: '16px 20px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <h4 style={{ margin: '0 0 6px 0', color: '#16a34a', fontSize: '15px' }}>
+                  🎉 Account Created for {createdInfo.name} ({createdInfo.role})
+                </h4>
+                <div style={{ fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.5 }}>
+                  <strong>Username / Login:</strong> <code>{createdInfo.username}</code> &nbsp;|&nbsp; <strong>Password:</strong> <code>{createdInfo.password}</code>
+                  {createdInfo.email && <span> &nbsp;|&nbsp; <strong>Email:</strong> <code>{createdInfo.email}</code></span>}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ padding: '8px 14px', fontSize: '12.5px' }}
+                onClick={() => copyCredentials(createdInfo.username, createdInfo.password, createdInfo.name, createdInfo.role, createdInfo.email)}
+              >
+                📋 Copy Login Details to Share
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="panel" style={{ marginBottom: '16px' }}>
           <div className="panel-header">
@@ -2989,30 +3102,81 @@ function MasterData() {
           <div className="panel-body">
             <form onSubmit={handleSubmit} className="form-grid">
               <div className="form-group">
-                <label className="form-label">{entity} Name <span className="req">*</span></label>
-                <input className="form-control" placeholder={isDept ? 'e.g. IT, Operations' : isHost ? 'e.g. Ravi Sharma' : 'e.g. Client Meeting, Audit'} value={form.name || ''} onChange={e => setField('name', e.target.value)} required />
+                <label className="form-label">{entity} Full Name <span className="req">*</span></label>
+                <input className="form-control" placeholder={isDept ? 'e.g. IT, Operations' : isHost ? 'e.g. Vikram Malhotra' : 'e.g. Client Meeting, Audit'} value={form.name || ''} onChange={e => setField('name', e.target.value)} required />
               </div>
+
               {isDept && (
                 <div className="form-group">
                   <label className="form-label">Code (Short)</label>
                   <input className="form-control" placeholder="e.g. IT, OPS" value={form.code || ''} onChange={e => setField('code', e.target.value)} />
                 </div>
               )}
-              {isHost ? (
-                <div className="form-group">
-                  <label className="form-label">Department / Designation</label>
-                  <input className="form-control" placeholder="e.g. Operations" value={form.department || ''} onChange={e => setField('department', e.target.value)} />
-                </div>
-              ) : (
+
+              {isHost && (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">System Role <span className="req">*</span></label>
+                    <select className="form-control" value={form.role || 'HOST'} onChange={e => setField('role', e.target.value)} required>
+                      <option value="HOST">Host / Employee (Can Review & Approve Visitors)</option>
+                      <option value="EMPLOYEE">Employee (Host)</option>
+                      <option value="CEO">Chief Executive Officer (CEO)</option>
+                      <option value="ADMIN">System Administrator</option>
+                      <option value="SUPER_ADMIN">Super Administrator</option>
+                      <option value="RECEPTION">Reception Desk</option>
+                      <option value="GUARD">Security Guard</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Email Address</label>
+                    <input className="form-control" type="email" placeholder="e.g. vikram@opsvision.com" value={form.email || ''} onChange={e => {
+                      const emailVal = e.target.value;
+                      setForm(prev => ({
+                        ...prev,
+                        email: emailVal,
+                        username: (!prev.username || prev.username === prev.email?.split('@')[0]) ? emailVal.split('@')[0] : prev.username
+                      }));
+                    }} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Username (Leave empty to auto-generate)</label>
+                    <input className="form-control" placeholder="e.g. vikram (Optional - auto-generated if blank)" value={form.username || ''} onChange={e => setField('username', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Login Password {editId ? '(Leave blank to keep unchanged)' : ''}</label>
+                    <input className="form-control" type="password" placeholder={editId ? '••••••••' : 'Enter login password (e.g. host123)'} value={form.password || ''} onChange={e => setField('password', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Department / Unit</label>
+                    <select className="form-control" value={form.department || ''} onChange={e => setField('department', e.target.value)}>
+                      <option value="">-- Select Department --</option>
+                      {departmentsList.map(d => (
+                        <option key={d.id} value={d.name}>{d.name} {d.code ? `(${d.code})` : ''}</option>
+                      ))}
+                      {form.department && !departmentsList.some(d => d.name === form.department) && (
+                        <option value={form.department}>{form.department}</option>
+                      )}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Mobile / Phone Number</label>
+                    <input className="form-control" placeholder="e.g. 9876543210" value={form.phone || ''} onChange={e => setField('phone', e.target.value)} />
+                  </div>
+                </>
+              )}
+
+              {!isHost && !isDept && (
                 <div className="form-group">
                   <label className="form-label">Description</label>
                   <input className="form-control" placeholder="Optional description" value={form.description || ''} onChange={e => setField('description', e.target.value)} />
                 </div>
               )}
+
               <div className="form-group full-width" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input type="checkbox" checked={form.active !== false} onChange={e => setField('active', e.target.checked)} />
-                <label className="checkbox-label" style={{ marginBottom: 0 }}>Active (visible in forms)</label>
+                <label className="checkbox-label" style={{ marginBottom: 0 }}>Active (Account enabled)</label>
               </div>
+
               <div className="form-group full-width">
                 {editId ? (
                   <>
@@ -3027,33 +3191,78 @@ function MasterData() {
           </div>
         </div>
 
+        {isHost && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ fontWeight: '700', fontSize: '14px', color: 'var(--text-main)' }}>
+              User Directory ({filteredItems.length} user{filteredItems.length !== 1 ? 's' : ''})
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-muted)' }}>Filter Role:</label>
+              <select className="form-control" style={{ width: 'auto', padding: '4px 10px', fontSize: '12.5px' }} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
+                <option value="ALL">All System Roles</option>
+                <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                <option value="ADMIN">ADMIN</option>
+                <option value="CEO">CEO</option>
+                <option value="HOST">HOST / EMPLOYEE</option>
+                <option value="RECEPTION">RECEPTION</option>
+                <option value="GUARD">GUARD</option>
+              </select>
+            </div>
+          </div>
+        )}
+
         <div className="table-container" style={{ border: 'none', boxShadow: 'none' }}>
           <table className="custom-table">
             <thead>
               <tr>
                 <th>Name</th>
                 {isDept && <th>Code</th>}
+                {isHost && <th>Role</th>}
+                {isHost && <th>Login Credentials</th>}
                 {isHost && <th>Department</th>}
-                {!isHost && <th>Description</th>}
+                {isHost && <th>Phone</th>}
+                {!isHost && !isDept && <th>Description</th>}
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={isDept ? 5 : 4} style={{ textAlign: 'center', padding: '30px' }}>Loading master data...</td></tr>
-              ) : items.length === 0 ? (
-                <tr><td colSpan={isDept ? 5 : 4} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No records found.</td></tr>
+                <tr><td colSpan={isHost ? 8 : isDept ? 5 : 4} style={{ textAlign: 'center', padding: '30px' }}>Loading master data...</td></tr>
+              ) : filteredItems.length === 0 ? (
+                <tr><td colSpan={isHost ? 8 : isDept ? 5 : 4} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>No records found.</td></tr>
               ) : (
-                items.map(it => (
+                filteredItems.map(it => (
                   <tr key={it.id}>
                     <td><b>{it.name}</b></td>
                     {isDept && <td>{it.code || <span style={{ color: 'var(--text-light)' }}>-</span>}</td>}
+                    {isHost && (
+                      <td>
+                        <span className="badge badge-inside" style={{ fontSize: '11px', textTransform: 'uppercase' }}>{it.role}</span>
+                      </td>
+                    )}
+                    {isHost && (
+                      <td>
+                        <div style={{ fontWeight: '700', color: 'var(--primary)' }}>👤 {it.username}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>✉️ {it.email || '-'}</div>
+                      </td>
+                    )}
                     {isHost && <td>{it.department || <span style={{ color: 'var(--text-light)' }}>-</span>}</td>}
-                    {!isHost && <td>{it.description || <span style={{ color: 'var(--text-light)' }}>-</span>}</td>}
+                    {isHost && <td>{it.phone || <span style={{ color: 'var(--text-light)' }}>-</span>}</td>}
+                    {!isHost && !isDept && <td>{it.description || <span style={{ color: 'var(--text-light)' }}>-</span>}</td>}
                     <td>{it.active ? <span style={{ color: 'var(--success)', fontWeight: 700 }}>Active</span> : <span style={{ color: 'var(--danger)', fontWeight: 700 }}>Inactive</span>}</td>
                     <td>
                       <button className="btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', marginRight: '4px' }} onClick={() => startEdit(it)}>Edit</button>
+                      {isHost && (
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: '4px 8px', fontSize: '12px', marginRight: '4px' }}
+                          title="Copy login details to clipboard"
+                          onClick={() => copyCredentials(it.username, '••••••••', it.name, it.role, it.email)}
+                        >
+                          📋 Copy Details
+                        </button>
+                      )}
                       <button className="btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }} onClick={() => remove(it.id)}>Remove</button>
                     </td>
                   </tr>
