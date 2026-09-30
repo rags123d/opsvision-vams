@@ -313,8 +313,46 @@ app.post('/api/auth/register-host', (req, res) => {
   });
 });
 
+// Unique Username Generator Helper
+function generateUniqueUsername(desiredUsername, email, excludeUserId = null) {
+  let base = '';
+  if (desiredUsername && desiredUsername.trim()) {
+    base = desiredUsername.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+  } else if (email && email.trim()) {
+    base = email.trim().toLowerCase().split('@')[0].replace(/[^a-z0-9_.-]/g, '');
+  }
+  if (!base) base = 'user';
+
+  let sql = 'SELECT id FROM users WHERE LOWER(username)=?';
+  const params = [base];
+  if (excludeUserId) {
+    sql += ' AND id!=?';
+    params.push(excludeUserId);
+  }
+  const existing = db.prepare(sql).get(...params);
+  if (!existing) return base;
+
+  let counter = 1;
+  while (counter < 1000) {
+    const candidate = `${base}${counter}`;
+    let checkSql = 'SELECT id FROM users WHERE LOWER(username)=?';
+    const checkParams = [candidate];
+    if (excludeUserId) {
+      checkSql += ' AND id!=?';
+      checkParams.push(excludeUserId);
+    }
+    const check = db.prepare(checkSql).get(...checkParams);
+    if (!check) return candidate;
+    counter++;
+  }
+  return `${base}_${Date.now()}`;
+}
+
 app.post('/api/auth/login', (req, res) => {
-  const u = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(req.body.username, req.body.username);
+  const input = req.body.username ? req.body.username.trim().toLowerCase() : '';
+  if (!input || !req.body.password) return res.status(401).json({ message: 'Username and password are required' });
+
+  const u = db.prepare('SELECT * FROM users WHERE LOWER(username)=? OR LOWER(email)=?').get(input, input);
   if (!u || !bcrypt.compareSync(req.body.password, u.password)) return res.status(401).json({ message: 'Invalid credentials' });
   if (u.active === 0) return res.status(403).json({ message: 'Account disabled. Contact system administrator.' });
 
@@ -390,14 +428,14 @@ app.get('/api/public/purposes', (req, res) => {
 });
 
 // User Management (Admin / Super Admin / Reception)
-app.get('/api/users', auth, roles('ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email,phone,active FROM users ORDER BY name').all()));
-app.get('/api/hosts', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO', 'HOST', 'EMPLOYEE'), (req, res) => res.json(db.prepare("SELECT id,name,username,role,department,email FROM users WHERE (role='HOST' OR role='EMPLOYEE' OR role='CEO' OR role='ADMIN' OR role='SUPER_ADMIN') AND active=1 ORDER BY name").all()));
+app.get('/api/users', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare('SELECT id,name,username,role,department,email,phone,active FROM users ORDER BY name').all()));
+app.get('/api/hosts', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO', 'HOST', 'EMPLOYEE'), (req, res) => res.json(db.prepare("SELECT id,name,username,role,department,email,phone FROM users WHERE (role='HOST' OR role='EMPLOYEE' OR role='CEO' OR role='ADMIN' OR role='SUPER_ADMIN') AND active=1 ORDER BY name").all()));
 app.get('/api/master/departments', auth, (req, res) => res.json(db.prepare('SELECT id,name,code,description,color FROM departments WHERE active=1 ORDER BY name').all()));
 app.get('/api/master/purposes', auth, (req, res) => res.json(db.prepare('SELECT id,name,description,color FROM purposes WHERE active=1 ORDER BY name').all()));
-app.get('/api/master/departments/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,code,description,color,active FROM departments ORDER BY name').all()));
-app.get('/api/master/purposes/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,description,color,active FROM purposes ORDER BY name').all()));
+app.get('/api/master/departments/all', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,code,description,color,active FROM departments ORDER BY name').all()));
+app.get('/api/master/purposes/all', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => res.json(db.prepare('SELECT id,name,description,color,active FROM purposes ORDER BY name').all()));
 
-app.post('/api/master/departments', auth, roles('ADMIN'), (req, res) => {
+app.post('/api/master/departments', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
   const { name, code, desc, color } = req.body;
   if (!name) return res.status(400).json({ message: 'Name is required' });
   const r = db.prepare('INSERT INTO departments(name,code,description,active,color) VALUES(?,?,?,1,?)').run(name, code || null, desc || null, color || '#3b82f6');
@@ -405,7 +443,7 @@ app.post('/api/master/departments', auth, roles('ADMIN'), (req, res) => {
   res.status(201).json({ message: 'Department added' });
 });
 
-app.post('/api/master/purposes', auth, roles('ADMIN'), (req, res) => {
+app.post('/api/master/purposes', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
   const { name, desc, color } = req.body;
   if (!name) return res.status(400).json({ message: 'Name is required' });
   const r = db.prepare('INSERT INTO purposes(name,description,active,color) VALUES(?,?,1,?)').run(name, desc || null, color || '#3b82f6');
@@ -413,7 +451,7 @@ app.post('/api/master/purposes', auth, roles('ADMIN'), (req, res) => {
   res.status(201).json({ message: 'Purpose added' });
 });
 
-app.put('/api/master/departments/:id', auth, roles('ADMIN'), (req, res) => {
+app.put('/api/master/departments/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
   const d = db.prepare('SELECT id,color FROM departments WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ message: 'Department not found' });
   const color = req.body.color || d.color || '#3b82f6';
@@ -422,7 +460,7 @@ app.put('/api/master/departments/:id', auth, roles('ADMIN'), (req, res) => {
   res.json({ message: 'Department updated' });
 });
 
-app.put('/api/master/purposes/:id', auth, roles('ADMIN'), (req, res) => {
+app.put('/api/master/purposes/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
   const d = db.prepare('SELECT id,color FROM purposes WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ message: 'Purpose not found' });
   const color = req.body.color || d.color || '#3b82f6';
@@ -431,41 +469,115 @@ app.put('/api/master/purposes/:id', auth, roles('ADMIN'), (req, res) => {
   res.json({ message: 'Purpose updated' });
 });
 
-app.delete('/api/master/departments/:id', auth, roles('ADMIN'), (req, res) => {
+app.delete('/api/master/departments/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
   db.prepare('UPDATE departments SET active=0 WHERE id=?').run(req.params.id);
   audit(req.user.id, 'DELETE', 'DEPARTMENT', req.params.id);
   res.json({ message: 'Department removed' });
 });
 
-app.delete('/api/master/purposes/:id', auth, roles('ADMIN'), (req, res) => {
+app.delete('/api/master/purposes/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
   db.prepare('UPDATE purposes SET active=0 WHERE id=?').run(req.params.id);
   audit(req.user.id, 'DELETE', 'PURPOSE', req.params.id);
   res.json({ message: 'Purpose removed' });
 });
 
-app.get('/api/master/hosts', auth, roles('ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare("SELECT id,name,department,email,active FROM users WHERE (role='HOST' OR role='EMPLOYEE') AND active=1 ORDER BY name").all()));
-app.get('/api/master/hosts/all', auth, roles('ADMIN'), (req, res) => res.json(db.prepare("SELECT id,name,username,department,email,active FROM users WHERE (role='HOST' OR role='EMPLOYEE') ORDER BY name").all()));
-
-app.post('/api/master/hosts', auth, roles('ADMIN'), (req, res) => {
-  const { name, department, email, active } = req.body;
-  if (!name) return res.status(400).json({ message: 'Name is required' });
-  const r = db.prepare('INSERT INTO users(username,password,name,role,department,email,active) VALUES(?,?,?,?,?,?,?)').run('host' + Date.now(), bcrypt.hashSync('host123', 10), name, 'HOST', department || null, email || null, active !== false ? 1 : 0);
-  audit(req.user.id, 'CREATE', 'HOST', r.lastInsertRowid, name);
-  res.status(201).json({ message: 'Host added' });
+// User Management Endpoints (Super Admin & Admin scope for all roles)
+app.get('/api/master/users/all', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  res.json(db.prepare('SELECT id,name,username,role,department,email,phone,active FROM users ORDER BY name').all());
 });
 
-app.put('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
-  const d = db.prepare("SELECT id FROM users WHERE id=? AND (role='HOST' OR role='EMPLOYEE')").get(req.params.id);
-  if (!d) return res.status(404).json({ message: 'Host not found' });
-  db.prepare('UPDATE users SET name=?,department=?,email=?,active=? WHERE id=?').run(req.body.name, req.body.department || null, req.body.email || null, req.body.active !== undefined ? (req.body.active ? 1 : 0) : 1, req.params.id);
-  audit(req.user.id, 'UPDATE', 'HOST', req.params.id, req.body.name);
-  res.json({ message: 'Host updated' });
+app.post('/api/master/users', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  const { name, role, department, email, username, password, phone, active } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ message: 'User Full Name is required' });
+
+  const validRoles = ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'];
+  const userRole = role && validRoles.includes(role) ? role : 'HOST';
+  const cleanEmail = email && email.trim() ? email.trim().toLowerCase() : null;
+
+  // Use accepted username if provided and unique; otherwise generate unique candidate
+  const userStr = generateUniqueUsername(username, cleanEmail);
+  const passStr = password && password.trim() ? password.trim() : (userRole.toLowerCase() + '123');
+  const passHash = bcrypt.hashSync(passStr, 10);
+
+  const r = db.prepare('INSERT INTO users(username,password,name,role,department,email,phone,active) VALUES(?,?,?,?,?,?,?,?)')
+    .run(userStr, passHash, name.trim(), userRole, department ? department.trim() : null, cleanEmail, phone ? phone.trim() : null, active !== false ? 1 : 0);
+
+  audit(req.user.id, 'CREATE', 'USER', r.lastInsertRowid, `${name} (${userRole})`);
+
+  // Dispatch Welcome Email if recipient email is provided
+  if (cleanEmail) {
+    sendEmail({
+      to: cleanEmail,
+      subject: `Welcome to OpsVision VAMS - Your Login Credentials`,
+      html: `<div style="font-family: sans-serif; padding: 20px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+        <h2 style="color: #1e3a8a; margin-top: 0;">Welcome to OpsVision Swagatham VAMS</h2>
+        <p>Hello <strong>${name.trim()}</strong>,</p>
+        <p>Your account has been created with role: <strong style="color: #2563eb;">${userRole}</strong>.</p>
+        <div style="background-color: #ffffff; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 15px 0;">
+          <p style="margin: 4px 0;"><strong>Username / Email:</strong> <code>${userStr}</code> (or <code>${cleanEmail}</code>)</p>
+          <p style="margin: 4px 0;"><strong>Password:</strong> <code>${passStr}</code></p>
+          <p style="margin: 4px 0;"><strong>System URL:</strong> <a href="https://vams.spandanatech.in">https://vams.spandanatech.in</a></p>
+        </div>
+        <p style="color: #64748b; font-size: 13px;">Please log in using your Username or Email address with the password above.</p>
+      </div>`
+    }).catch(err => console.error('[VAMS EMAIL ERROR]', err));
+  }
+
+  res.status(201).json({
+    message: `User account created successfully! Username: ${userStr}`,
+    username: userStr,
+    initialPassword: passStr,
+    role: userRole
+  });
 });
 
-app.delete('/api/master/hosts/:id', auth, roles('ADMIN'), (req, res) => {
-  db.prepare("UPDATE users SET active=0 WHERE id=? AND (role='HOST' OR role='EMPLOYEE')").run(req.params.id);
-  audit(req.user.id, 'DELETE', 'HOST', req.params.id);
-  res.json({ message: 'Host removed' });
+app.put('/api/master/users/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  const d = db.prepare('SELECT id, username, role FROM users WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ message: 'User not found' });
+
+  const { name, role, department, email, username, password, phone, active } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ message: 'User Full Name is required' });
+
+  const validRoles = ['SUPER_ADMIN', 'ADMIN', 'CEO', 'RECEPTION', 'GUARD', 'HOST', 'EMPLOYEE'];
+  const userRole = role && validRoles.includes(role) ? role : d.role;
+  const cleanEmail = email && email.trim() ? email.trim().toLowerCase() : null;
+
+  // Accept custom username if unique, or generate unique fallback
+  const userStr = generateUniqueUsername(username, cleanEmail, d.id);
+
+  if (password && password.trim().length > 0) {
+    const passHash = bcrypt.hashSync(password.trim(), 10);
+    db.prepare('UPDATE users SET name=?,username=?,role=?,department=?,email=?,phone=?,password=?,active=? WHERE id=?')
+      .run(name.trim(), userStr, userRole, department ? department.trim() : null, cleanEmail, phone ? phone.trim() : null, passHash, active !== undefined ? (active ? 1 : 0) : 1, req.params.id);
+  } else {
+    db.prepare('UPDATE users SET name=?,username=?,role=?,department=?,email=?,phone=?,active=? WHERE id=?')
+      .run(name.trim(), userStr, userRole, department ? department.trim() : null, cleanEmail, phone ? phone.trim() : null, active !== undefined ? (active ? 1 : 0) : 1, req.params.id);
+  }
+
+  audit(req.user.id, 'UPDATE', 'USER', req.params.id, `${name} (${userRole})`);
+  res.json({ message: 'User account updated successfully', username: userStr });
+});
+
+app.delete('/api/master/users/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  db.prepare('UPDATE users SET active=0 WHERE id=?').run(req.params.id);
+  audit(req.user.id, 'DELETE', 'USER', req.params.id);
+  res.json({ message: 'User account deactivated' });
+});
+
+// Backwards compatibility aliases for host master endpoints
+app.get('/api/master/hosts', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION'), (req, res) => res.json(db.prepare("SELECT id,name,username,role,department,email,phone,active FROM users WHERE active=1 ORDER BY name").all()));
+app.get('/api/master/hosts/all', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => res.json(db.prepare("SELECT id,name,username,role,department,email,phone,active FROM users ORDER BY name").all()));
+app.post('/api/master/hosts', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  req.url = '/api/master/users';
+  app.handle(req, res);
+});
+app.put('/api/master/hosts/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  req.url = `/api/master/users/${req.params.id}`;
+  app.handle(req, res);
+});
+app.delete('/api/master/hosts/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  req.url = `/api/master/users/${req.params.id}`;
+  app.handle(req, res);
 });
 
 app.get('/api/dashboard', auth, (req, res) => res.json(dashboard(req.user)));
@@ -775,7 +887,7 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
 });
 
 // Legacy Approval Compatibility Router
-app.get('/api/approvals', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO'), (req, res) => {
+app.get('/api/approvals', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO', 'GUARD'), (req, res) => {
   let mine = '';
   // ADMIN and SUPER_ADMIN view all approvals; all other roles see only visits where they are designated host
   if (req.user.role !== 'ADMIN' && req.user.role !== 'SUPER_ADMIN') {
@@ -784,13 +896,13 @@ app.get('/api/approvals', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 
   res.json(db.prepare(`SELECT a.*,x.visitor_code,x.status visit_status,x.expected_arrival_time,x.proposed_arrival_time,x.rejection_reason,x.initiator_type,v.name visitor_name,v.company,v.purpose,v.mobile,u.name host_name FROM approvals a JOIN visits x ON x.id=a.visit_id JOIN visitors v ON v.id=x.visitor_id JOIN users u ON u.id=a.host_id WHERE 1=1 ${mine} ORDER BY a.id DESC`).all());
 });
 
-app.post('/api/approvals/:visitId', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO'), (req, res) => {
+app.post('/api/approvals/:visitId', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN', 'CEO', 'GUARD'), (req, res) => {
   const visit = db.prepare('SELECT * FROM visits WHERE id=?').get(req.params.visitId);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
   const approval = db.prepare('SELECT * FROM approvals WHERE visit_id=?').get(visit.id);
-  const isHostSelf = approval.host_id === req.user.id;
-  const isAdmin = req.user.role === 'ADMIN' || req.user.role === 'SUPER_ADMIN';
-  if (!isHostSelf && !isAdmin) {
+  const isHostSelf = approval && approval.host_id === req.user.id;
+  const isAdminOrStaff = req.user.role === 'ADMIN' || req.user.role === 'SUPER_ADMIN' || req.user.role === 'RECEPTION' || req.user.role === 'GUARD';
+  if (!isHostSelf && !isAdminOrStaff) {
     return res.status(403).json({ message: 'Forbidden: You can only act on visitor passes assigned to you as host.' });
   }
   const status = req.body.action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
