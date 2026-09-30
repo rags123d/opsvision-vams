@@ -1363,32 +1363,34 @@ function Dashboard({ user, setTab, viewPass }) {
         </div>
       </div>
 
-      {/* Top Stat Cards */}
-      <div className="dashboard-grid">
-        {kpis.map((kpi, idx) => {
-          const Icon = kpi.icon;
-          return (
-            <div
-              key={idx}
-              className="kpi-card"
-              style={{ '--kpi-accent': kpi.accent, '--kpi-bg': kpi.bg }}
-            >
-              <div>
-                <div className="kpi-header">
-                  <span className="kpi-title">{kpi.title}</span>
-                  <div className="kpi-icon">
-                    <Icon />
+      {/* Top Stat Cards (Hidden for Guard and Reception) */}
+      {!(role === 'GUARD' || role === 'RECEPTION') && (
+        <div className="dashboard-grid">
+          {kpis.map((kpi, idx) => {
+            const Icon = kpi.icon;
+            return (
+              <div
+                key={idx}
+                className="kpi-card"
+                style={{ '--kpi-accent': kpi.accent, '--kpi-bg': kpi.bg }}
+              >
+                <div>
+                  <div className="kpi-header">
+                    <span className="kpi-title">{kpi.title}</span>
+                    <div className="kpi-icon">
+                      <Icon />
+                    </div>
                   </div>
+                  <div className="kpi-value">{loading ? '...' : kpi.val}</div>
                 </div>
-                <div className="kpi-value">{loading ? '...' : kpi.val}</div>
+                <div className="kpi-footer">
+                  <span>●</span> {kpi.footer}
+                </div>
               </div>
-              <div className="kpi-footer">
-                <span>●</span> {kpi.footer}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main 2-Column Split */}
       <div className="dashboard-columns">
@@ -1559,9 +1561,11 @@ function WebcamCapture({ onCapture, onCancel, mandatory }) {
 // ================= REGISTRATION VIEW =================
 function Register({ user, setTab, viewPass }) {
   const [hosts, setHosts] = useState([]);
+  const isHostUser = (user && (user.role === 'HOST' || user.role === 'EMPLOYEE' || user.role === 'CEO'));
+  const [regType, setRegType] = useState(isHostUser ? 'GUEST' : 'NORMAL'); // 'NORMAL' or 'GUEST'
   const [form, setForm] = useState(() => ({
     consent: true,
-    host_id: (user && (user.role === 'HOST' || user.role === 'EMPLOYEE' || user.role === 'CEO')) ? user.id : ''
+    host_id: isHostUser ? user.id : ''
   }));
   const [out, setOut] = useState(null);
   const [msg, setMsg] = useState('');
@@ -1573,6 +1577,7 @@ function Register({ user, setTab, viewPass }) {
   const [purposeOther, setPurposeOther] = useState(false);
   const [departmentOther, setDepartmentOther] = useState(false);
   const [showLogoAnim, setShowLogoAnim] = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     api('/hosts').then(setHosts).catch(() => { });
@@ -1582,6 +1587,55 @@ function Register({ user, setTab, viewPass }) {
 
   const setField = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
+  const autoPopulateDepartment = (hostDept, availableDepts = departments) => {
+    if (!hostDept) return '';
+    const deptStr = String(hostDept).trim();
+    if (!deptStr) return '';
+    const match = availableDepts.find(d => 
+      d.name.toLowerCase() === deptStr.toLowerCase() ||
+      (d.code && d.code.toLowerCase() === deptStr.toLowerCase())
+    );
+    return match ? match.name : deptStr;
+  };
+
+  // Auto-populate Department based on Host Department
+  const handleHostChange = (selectedHostId) => {
+    setField('host_id', selectedHostId);
+    if (selectedHostId) {
+      const selectedHost = hosts.find(h => String(h.id) === String(selectedHostId));
+      if (selectedHost && selectedHost.department) {
+        const resolvedDept = autoPopulateDepartment(selectedHost.department, departments);
+        setField('department', resolvedDept);
+        setDepartmentOther(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (form.host_id && hosts.length > 0 && departments.length > 0) {
+      const selectedHost = hosts.find(h => String(h.id) === String(form.host_id));
+      if (selectedHost && selectedHost.department && !form.department) {
+        const resolvedDept = autoPopulateDepartment(selectedHost.department, departments);
+        setField('department', resolvedDept);
+        setDepartmentOther(false);
+      }
+    }
+  }, [hosts, departments, form.host_id]);
+
+  const handleGalleryUpload = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setMsg('Error: Please select a valid image file');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      setPhotoPreview(evt.target.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (loading) return;
@@ -1589,24 +1643,28 @@ function Register({ user, setTab, viewPass }) {
       setMsg('Error: Mobile number must be exactly 10 digits');
       return;
     }
-    if (form.expected_checkin && form.expected_checkout && new Date(form.expected_checkout) <= new Date(form.expected_checkin)) {
+    if (regType === 'GUEST' && form.expected_checkin && form.expected_checkout && new Date(form.expected_checkout) <= new Date(form.expected_checkin)) {
       setMsg('Error: Check-out time must be later than check-in time');
       return;
     }
     setLoading(true);
     setMsg('');
     try {
+      const nowIso = new Date().toISOString();
+      const payload = {
+        ...form,
+        expected_checkin: regType === 'GUEST' ? (form.expected_checkin || nowIso) : nowIso,
+        expected_checkout: regType === 'GUEST' ? (form.expected_checkout || null) : null,
+        photo: photoPreview || form.photo || null
+      };
       const d = await api('/visitors/register', {
         method: 'POST',
-        body: JSON.stringify({
-          ...form,
-          photo: photoPreview || form.photo || null
-        })
+        body: JSON.stringify(payload)
       });
       setOut(d);
       setShowCamera(false);
       setShowLogoAnim(true);
-      setMsg('Visitor registered successfully! Status: Awaiting Host Approval.');
+      setMsg(`Visitor registered successfully as ${regType === 'GUEST' ? 'Guest Pass' : 'Normal Visitor'}! Status: Awaiting Host Approval.`);
     } catch (err) {
       setMsg('Error: ' + err.message);
     } finally {
@@ -1616,13 +1674,44 @@ function Register({ user, setTab, viewPass }) {
 
   return (
     <div className="panel" style={{ maxWidth: '840px', margin: '0 auto' }}>
-      {showLogoAnim && <LogoAnimationOverlay onComplete={() => setShowLogoAnim(false)} />}
+      {showLogoAnim && (
+        <LogoAnimationOverlay
+          onComplete={() => {
+            setShowLogoAnim(false);
+            setTab('visitors');
+          }}
+        />
+      )}
       <div className="panel-header">
         <h3 className="panel-title">
-          <Icons.Register /> Register New Visitor
+          <Icons.Register /> {regType === 'GUEST' ? 'Register Guest (Pre-Issue Pass)' : 'Register New Visitor'}
         </h3>
       </div>
       <div className="panel-body">
+        {/* Registration Type Selector */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', background: 'var(--bg-card-subtle)', padding: '6px', borderRadius: '10px' }}>
+          <button
+            type="button"
+            className={`nav-item ${regType === 'NORMAL' ? 'active' : ''}`}
+            style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', justifyContent: 'center' }}
+            onClick={() => {
+              setRegType('NORMAL');
+              setField('expected_checkin', '');
+              setField('expected_checkout', '');
+            }}
+          >
+            🏢 Normal Visitor Registration (Walk-in)
+          </button>
+          <button
+            type="button"
+            className={`nav-item ${regType === 'GUEST' ? 'active' : ''}`}
+            style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', justifyContent: 'center' }}
+            onClick={() => setRegType('GUEST')}
+          >
+            🎟️ Guest Registration (Pre-Scheduled Visit)
+          </button>
+        </div>
+
         {msg && (
           <div className={`alert-box ${msg.startsWith('Error') ? 'alert-error' : 'alert-success'}`}>
             <div>
@@ -1639,6 +1728,13 @@ function Register({ user, setTab, viewPass }) {
                 <button
                   type="button"
                   className="btn-primary"
+                  onClick={() => setTab('visitors')}
+                >
+                  📋 Go to Visitor Directory
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
                   onClick={() => viewPass(out.visitId)}
                 >
                   View Digital Pass
@@ -1649,7 +1745,7 @@ function Register({ user, setTab, viewPass }) {
                   onClick={() => setShowLogoAnim(true)}
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
-                  <span>✨ Replay Logo Animation</span>
+                  <span>✨ Replay Animation</span>
                 </button>
               </div>
             )}
@@ -1713,7 +1809,7 @@ function Register({ user, setTab, viewPass }) {
               required
               className="form-control"
               value={form.host_id || ''}
-              onChange={e => setField('host_id', e.target.value)}
+              onChange={e => handleHostChange(e.target.value)}
             >
               <option value="">Select Person to Meet (Host)</option>
               {hosts.map(x => (
@@ -1771,6 +1867,9 @@ function Register({ user, setTab, viewPass }) {
             >
               <option value="">Select Department</option>
               {departments.map(d => <option value={d.name} key={d.id}>{d.name}{d.code ? ` [${d.code}]` : ''}</option>)}
+              {form.department && !departments.some(d => d.name === form.department || d.code === form.department) && (
+                <option value={form.department}>{form.department}</option>
+              )}
               <option value="__other__">Other (specify below)</option>
             </select>
             {departmentOther && (
@@ -1784,32 +1883,44 @@ function Register({ user, setTab, viewPass }) {
             )}
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Expected Check-in Time <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
-            <input
-              type="datetime-local"
-              className="form-control"
-              value={form.expected_checkin || ''}
-              onChange={e => setField('expected_checkin', e.target.value)}
-            />
-          </div>
+          {/* Expected Check-in and Check-out Date fields: Available ONLY for Guest Registration */}
+          {regType === 'GUEST' && (
+            <>
+              <div className="form-group">
+                <label className="form-label">Expected Check-in Time <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
+                <input
+                  type="datetime-local"
+                  className="form-control"
+                  value={form.expected_checkin || ''}
+                  onChange={e => setField('expected_checkin', e.target.value)}
+                />
+              </div>
 
-          <div className="form-group">
-            <label className="form-label">Expected Check-out Time <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
-            <input
-              type="datetime-local"
-              className="form-control"
-              value={form.expected_checkout || ''}
-              onChange={e => setField('expected_checkout', e.target.value)}
-            />
-          </div>
+              <div className="form-group">
+                <label className="form-label">Expected Check-out Time <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'normal' }}>(Optional)</span></label>
+                <input
+                  type="datetime-local"
+                  className="form-control"
+                  value={form.expected_checkout || ''}
+                  onChange={e => setField('expected_checkout', e.target.value)}
+                />
+              </div>
+            </>
+          )}
 
           <div className="form-group full-width">
             <label className="form-label">Visitor Photo (Optional)</label>
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={handleGalleryUpload}
+            />
             {photoPreview ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                 <img src={photoPreview} alt="Visitor Preview" style={{ width: '80px', height: '80px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--primary)' }} />
-                <button type="button" className="btn-secondary" onClick={() => setPhotoPreview(null)}>Retake Photo</button>
+                <button type="button" className="btn-secondary" onClick={() => setPhotoPreview(null)}>Remove / Retake Photo</button>
               </div>
             ) : showCamera ? (
               <div style={{ padding: '15px', border: '1px solid var(--border-color)', borderRadius: '8px', backgroundColor: 'var(--bg-card-subtle)' }}>
@@ -1824,9 +1935,14 @@ function Register({ user, setTab, viewPass }) {
                 />
               </div>
             ) : (
-              <button type="button" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => setShowCamera(true)}>
-                📷 Snap Visitor Photo
-              </button>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button type="button" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => setShowCamera(true)}>
+                  📷 Snap Photo (Webcam)
+                </button>
+                <button type="button" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => fileInputRef.current?.click()}>
+                  🖼️ Upload from Gallery
+                </button>
+              </div>
             )}
           </div>
 
@@ -1843,7 +1959,7 @@ function Register({ user, setTab, viewPass }) {
 
           <div className="form-group full-width" style={{ marginTop: '10px' }}>
             <button type="submit" className="btn-primary" disabled={loading}>
-              {loading ? 'Submitting Registration...' : 'Submit Visitor Registration'}
+              {loading ? 'Submitting Registration...' : `Submit ${regType === 'GUEST' ? 'Guest Registration' : 'Visitor Registration'}`}
             </button>
           </div>
         </form>
@@ -3041,12 +3157,16 @@ function MasterData() {
     } catch (err) { setMsg('Error: ' + err.message); }
   };
 
-  const remove = async (id) => {
-    if (!confirm(`Deactivate this ${entity.toLowerCase()}?`)) return;
+  const remove = async (item) => {
+    const isInactive = !item.active;
+    const confirmMsg = isInactive
+      ? `Are you sure you want to permanently delete this ${entity.toLowerCase()} ("${item.name}")?`
+      : `Are you sure you want to deactivate this ${entity.toLowerCase()} ("${item.name}")?`;
+    if (!confirm(confirmMsg)) return;
     try {
-      const endpoint = isHost ? `/master/users/${id}` : `/master/${tab}/${id}`;
-      await api(endpoint, { method: 'DELETE' });
-      setMsg(`${entity} deactivated`);
+      const endpoint = isHost ? `/master/users/${item.id}` : `/master/${tab}/${item.id}`;
+      const res = await api(endpoint, { method: 'DELETE' });
+      setMsg(res.message || `${entity} ${isInactive ? 'deleted' : 'deactivated'}`);
       load();
     } catch (err) { setMsg('Error: ' + err.message); }
   };
@@ -3263,7 +3383,7 @@ function MasterData() {
                           📋 Copy Details
                         </button>
                       )}
-                      <button className="btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }} onClick={() => remove(it.id)}>Remove</button>
+                      <button className="btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger-border)' }} onClick={() => remove(it)}>Remove</button>
                     </td>
                   </tr>
                 ))

@@ -470,15 +470,39 @@ app.put('/api/master/purposes/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, r
 });
 
 app.delete('/api/master/departments/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
-  db.prepare('UPDATE departments SET active=0 WHERE id=?').run(req.params.id);
-  audit(req.user.id, 'DELETE', 'DEPARTMENT', req.params.id);
-  res.json({ message: 'Department removed' });
+  const d = db.prepare('SELECT id, active, name FROM departments WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ message: 'Department not found' });
+  if (d.active === 0) {
+    try {
+      db.prepare('DELETE FROM departments WHERE id=?').run(req.params.id);
+      audit(req.user.id, 'PERMANENT_DELETE', 'DEPARTMENT', req.params.id, d.name);
+      return res.json({ message: 'Department permanently deleted' });
+    } catch (err) {
+      return res.status(400).json({ message: 'Cannot delete department: ' + err.message });
+    }
+  } else {
+    db.prepare('UPDATE departments SET active=0 WHERE id=?').run(req.params.id);
+    audit(req.user.id, 'DELETE', 'DEPARTMENT', req.params.id, d.name);
+    return res.json({ message: 'Department deactivated' });
+  }
 });
 
 app.delete('/api/master/purposes/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
-  db.prepare('UPDATE purposes SET active=0 WHERE id=?').run(req.params.id);
-  audit(req.user.id, 'DELETE', 'PURPOSE', req.params.id);
-  res.json({ message: 'Purpose removed' });
+  const p = db.prepare('SELECT id, active, name FROM purposes WHERE id=?').get(req.params.id);
+  if (!p) return res.status(404).json({ message: 'Purpose not found' });
+  if (p.active === 0) {
+    try {
+      db.prepare('DELETE FROM purposes WHERE id=?').run(req.params.id);
+      audit(req.user.id, 'PERMANENT_DELETE', 'PURPOSE', req.params.id, p.name);
+      return res.json({ message: 'Purpose permanently deleted' });
+    } catch (err) {
+      return res.status(400).json({ message: 'Cannot delete purpose: ' + err.message });
+    }
+  } else {
+    db.prepare('UPDATE purposes SET active=0 WHERE id=?').run(req.params.id);
+    audit(req.user.id, 'DELETE', 'PURPOSE', req.params.id, p.name);
+    return res.json({ message: 'Purpose deactivated' });
+  }
 });
 
 // User Management Endpoints (Super Admin & Admin scope for all roles)
@@ -559,9 +583,26 @@ app.put('/api/master/users/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res)
 });
 
 app.delete('/api/master/users/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) => {
-  db.prepare('UPDATE users SET active=0 WHERE id=?').run(req.params.id);
-  audit(req.user.id, 'DELETE', 'USER', req.params.id);
-  res.json({ message: 'User account deactivated' });
+  const u = db.prepare('SELECT id, active, name FROM users WHERE id=?').get(req.params.id);
+  if (!u) return res.status(404).json({ message: 'User not found' });
+  if (u.active === 0) {
+    try {
+      db.prepare('DELETE FROM notifications WHERE user_id=?').run(req.params.id);
+      db.prepare('UPDATE visitors SET host_id=NULL WHERE host_id=?').run(req.params.id);
+      db.prepare('UPDATE visits SET entry_guard_id=NULL WHERE entry_guard_id=?').run(req.params.id);
+      db.prepare('UPDATE visits SET exit_guard_id=NULL WHERE exit_guard_id=?').run(req.params.id);
+      db.prepare('DELETE FROM approvals WHERE host_id=?').run(req.params.id);
+      db.prepare('DELETE FROM users WHERE id=?').run(req.params.id);
+      audit(req.user.id, 'PERMANENT_DELETE', 'USER', req.params.id, u.name);
+      return res.json({ message: 'User account permanently deleted' });
+    } catch (err) {
+      return res.status(400).json({ message: 'Cannot delete user: ' + err.message });
+    }
+  } else {
+    db.prepare('UPDATE users SET active=0 WHERE id=?').run(req.params.id);
+    audit(req.user.id, 'DELETE', 'USER', req.params.id, u.name);
+    return res.json({ message: 'User account deactivated' });
+  }
 });
 
 // Backwards compatibility aliases for host master endpoints
@@ -618,7 +659,7 @@ app.post('/api/visitors/register', auth, async (req, res) => {
   const validUntil = expected_checkout || new Date(Date.now() + 8 * 3600000).toISOString();
 
   // If created by host for themselves, auto approve; otherwise default to PENDING_HOST_REVIEW (Awaiting Approval)
-  const isHostSelf = (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE') && req.user.id === Number(host_id);
+  const isHostSelf = (req.user.role === 'HOST' || req.user.role === 'EMPLOYEE' || req.user.role === 'CEO') && req.user.id === Number(host_id);
   const status = isHostSelf ? 'APPROVED' : 'PENDING_HOST_REVIEW';
 
   const tx = db.transaction(() => {
@@ -636,12 +677,34 @@ app.post('/api/visitors/register', auth, async (req, res) => {
 
   // Dispatch In-App Notification to Host
   createNotification({
-    user_id: host_id,
+    user_id: Number(host_id),
     type: 'VISITOR_REGISTERED',
     title: '🔔 New Visitor Registered (Awaiting Approval)',
     message: `${name} (${company || 'Individual'}) registered to meet you. Please review and approve.`,
     link_id: out.visitId
   });
+
+  // Host Email Notification
+  const hostUser = db.prepare('SELECT * FROM users WHERE id=?').get(host_id);
+  if (hostUser && hostUser.email) {
+    sendEmail({
+      to: hostUser.email,
+      subject: `[OpsVision VAMS] New Visitor Request: ${name} is visiting you`,
+      html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f1f5f9; color: #1e293b;">
+        <div style="max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 24px;">
+          <h2 style="color: #2563eb; margin-top: 0;">New Visitor Approval Request</h2>
+          <p>Hello <strong>${hostUser.name}</strong>,</p>
+          <p>A visitor has been registered to meet you at reception/gate:</p>
+          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+            <tr><td style="padding: 6px; font-weight: bold;">Visitor Name:</td><td style="padding: 6px;">${name}</td></tr>
+            <tr><td style="padding: 6px; font-weight: bold;">Company:</td><td style="padding: 6px;">${company || 'N/A'}</td></tr>
+            <tr><td style="padding: 6px; font-weight: bold;">Purpose:</td><td style="padding: 6px;">${purpose || 'Visit'}</td></tr>
+          </table>
+          <p>Please log in to your OpsVision VAMS Dashboard to review and single-tap approve or reject this visitor pass.</p>
+        </div>
+      </div>`
+    }).catch(err => console.error('[VAMS EMAIL ERROR]', err));
+  }
 
   res.status(201).json({ message: 'Visitor registered successfully! Status: Awaiting Host Approval.', ...out });
 });
