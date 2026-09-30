@@ -140,6 +140,11 @@ function StatusBadge({ status }) {
 function LogoAnimationOverlay({ onComplete }) {
   const [disappearing, setDisappearing] = useState(false);
   const [fadeOut, setFadeOut] = useState(false);
+  const onCompleteRef = useRef(onComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     // Stage 1: Convergence (0ms - 800ms)
@@ -148,7 +153,7 @@ function LogoAnimationOverlay({ onComplete }) {
     const timer2 = setTimeout(() => setFadeOut(true), 1000);
     // Stage 3: Remove overlay completely from DOM (1100ms)
     const timer3 = setTimeout(() => {
-      if (onComplete) onComplete();
+      if (onCompleteRef.current) onCompleteRef.current();
     }, 1100);
 
     return () => {
@@ -156,7 +161,7 @@ function LogoAnimationOverlay({ onComplete }) {
       clearTimeout(timer2);
       clearTimeout(timer3);
     };
-  }, [onComplete]);
+  }, []);
 
   return (
     <div className={`logo-anim-overlay ${fadeOut ? 'fade-out' : ''}`}>
@@ -831,7 +836,7 @@ function SmtpSettingsModal({ onClose }) {
               </div>
               <div className="form-group full-width">
                 <label className="form-label">Sender From Header</label>
-                <input className="form-control" value={form.from} onChange={e => setForm({ ...form, from: e.target.value })} placeholder='"OpsVision VAMS" <notifications@yourcompany.com>' />
+                <input className="form-control" value={form.from} onChange={e => setForm({ ...form, from: e.target.value })} placeholder='"Swagatham VMS" <notifications@yourcompany.com>' />
               </div>
               <div className="form-group full-width" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
                 <button type="submit" className="btn-primary" style={{ flex: 1 }}>Save Settings</button>
@@ -1728,13 +1733,6 @@ function Register({ user, setTab, viewPass }) {
                 <button
                   type="button"
                   className="btn-primary"
-                  onClick={() => setTab('visitors')}
-                >
-                  📋 Go to Visitor Directory
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
                   onClick={() => viewPass(out.visitId)}
                 >
                   View Digital Pass
