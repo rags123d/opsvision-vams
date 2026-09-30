@@ -84,7 +84,7 @@ function getSmtpConfig() {
     secure: getSetting('smtp_secure') !== null ? getSetting('smtp_secure') === 'true' : (process.env.SMTP_SECURE !== 'false'),
     user: getSetting('smtp_user') || process.env.SMTP_USER || '',
     pass: getSetting('smtp_pass') || process.env.SMTP_PASS || '',
-    from: getSetting('smtp_from') || process.env.SMTP_FROM || `"OpsVision VAMS" <${getSetting('smtp_user') || process.env.SMTP_USER || 'notifications@opsvision.com'}>`
+    from: getSetting('smtp_from') || process.env.SMTP_FROM || `"Swagatham VMS" <${getSetting('smtp_user') || process.env.SMTP_USER || 'notifications@opsvision.com'}>`
   };
 }
 
@@ -402,9 +402,9 @@ app.post('/api/admin/test-email', auth, roles('ADMIN'), async (req, res) => {
   if (!targetEmail) return res.status(400).json({ message: 'Target email is required' });
   const result = await sendEmail({
     to: targetEmail,
-    subject: 'OpsVision VAMS - SMTP Test Email',
+    subject: 'Swagatham VMS - SMTP Test Email',
     html: `<div style="font-family: sans-serif; padding: 20px; background-color: #f8fafc; border-radius: 8px;">
-      <h2 style="color: #1e3a8a;">OpsVision VAMS - SMTP Verification</h2>
+      <h2 style="color: #1e3a8a;">Swagatham VMS - SMTP Verification</h2>
       <p>Congratulations! Your Google Workspace SMTP configuration is working properly.</p>
       <p style="color: #64748b; font-size: 14px;">Sent at: ${new Date().toLocaleString()}</p>
     </div>`
@@ -532,9 +532,9 @@ app.post('/api/master/users', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) =>
   if (cleanEmail) {
     sendEmail({
       to: cleanEmail,
-      subject: `Welcome to OpsVision VAMS - Your Login Credentials`,
+      subject: `Welcome to Swagatham VMS - Your Login Credentials`,
       html: `<div style="font-family: sans-serif; padding: 20px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
-        <h2 style="color: #1e3a8a; margin-top: 0;">Welcome to OpsVision Swagatham VAMS</h2>
+        <h2 style="color: #1e3a8a; margin-top: 0;">Welcome to Swagatham VMS</h2>
         <p>Hello <strong>${name.trim()}</strong>,</p>
         <p>Your account has been created with role: <strong style="color: #2563eb;">${userRole}</strong>.</p>
         <div style="background-color: #ffffff; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 15px 0;">
@@ -689,7 +689,7 @@ app.post('/api/visitors/register', auth, async (req, res) => {
   if (hostUser && hostUser.email) {
     sendEmail({
       to: hostUser.email,
-      subject: `[OpsVision VAMS] New Visitor Request: ${name} is visiting you`,
+      subject: `[Swagatham VMS] New Visitor Request: ${name} is visiting you`,
       html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f1f5f9; color: #1e293b;">
         <div style="max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 24px;">
           <h2 style="color: #2563eb; margin-top: 0;">New Visitor Approval Request</h2>
@@ -700,7 +700,7 @@ app.post('/api/visitors/register', auth, async (req, res) => {
             <tr><td style="padding: 6px; font-weight: bold;">Company:</td><td style="padding: 6px;">${company || 'N/A'}</td></tr>
             <tr><td style="padding: 6px; font-weight: bold;">Purpose:</td><td style="padding: 6px;">${purpose || 'Visit'}</td></tr>
           </table>
-          <p>Please log in to your OpsVision VAMS Dashboard to review and single-tap approve or reject this visitor pass.</p>
+          <p>Please log in to your Swagatham VMS Dashboard to review and single-tap approve or reject this visitor pass.</p>
         </div>
       </div>`
     }).catch(err => console.error('[VAMS EMAIL ERROR]', err));
@@ -787,7 +787,7 @@ app.post('/api/public/register-visit', async (req, res) => {
   if (hostUser && hostUser.email) {
     sendEmail({
       to: hostUser.email,
-      subject: `[OpsVision VAMS] Pre-Approval Request: ${name} is visiting you`,
+      subject: `[Swagatham VMS] Pre-Approval Request: ${name} is visiting you`,
       html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f1f5f9; color: #1e293b;">
         <div style="max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 24px;">
           <h2 style="color: #2563eb; margin-top: 0;">Visitor Pre-Approval Request</h2>
@@ -799,7 +799,7 @@ app.post('/api/public/register-visit', async (req, res) => {
             <tr><td style="padding: 6px; font-weight: bold;">Purpose:</td><td style="padding: 6px;">${purpose}</td></tr>
             <tr><td style="padding: 6px; font-weight: bold;">Expected Arrival:</td><td style="padding: 6px; color: #2563eb; font-weight: bold;">${new Date(expected_arrival_time).toLocaleString()}</td></tr>
           </table>
-          <p>Please log in to your OpsVision VAMS Host Dashboard to Single-Tap Approve, Propose New Time, or Reject this visit.</p>
+          <p>Please log in to your Swagatham VMS Host Dashboard to Single-Tap Approve, Propose New Time, or Reject this visit.</p>
         </div>
       </div>`
     });
@@ -889,7 +889,7 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
     if (visit.visitor_email) {
       sendEmail({
         to: visit.visitor_email,
-        subject: `[OpsVision VAMS] Your Visitor Pass is Approved! Code: ${visit.visitor_code}`,
+        subject: `[Swagatham VMS] Your Visitor Pass is Approved! Code: ${visit.visitor_code}`,
         html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #ecfdf5; border-radius: 8px;">
           <h2 style="color: #059669;">Visitor Pass Approved!</h2>
           <p>Dear <strong>${visit.visitor_name}</strong>,</p>
@@ -915,7 +915,7 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
       const confirmUrl = `${req.headers.origin || 'http://localhost:5173'}?confirmToken=${visit.pass_token}`;
       sendEmail({
         to: visit.visitor_email,
-        subject: `[OpsVision VAMS] Host Proposed New Visit Time: ${visit.visitor_name}`,
+        subject: `[Swagatham VMS] Host Proposed New Visit Time: ${visit.visitor_name}`,
         html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #fffbeb; border-radius: 8px;">
           <h2 style="color: #d97706;">Reschedule Proposal from Host</h2>
           <p>Dear <strong>${visit.visitor_name}</strong>,</p>
