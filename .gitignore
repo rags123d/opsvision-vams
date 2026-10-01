@@ -4,3 +4,9 @@ node_modules/
 *.db-shm
 *.db-wal
 dist/
+
+# Archive folder for unused assets (never commit to git)
+archive/
+**/archive/**
+frontend/public/archive/
+

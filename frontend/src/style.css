@@ -1651,7 +1651,7 @@ body {
   pointer-events: none;
   overflow: hidden;
   opacity: 1;
-  transition: opacity 0.25s ease-out;
+  transition: opacity 0.4s ease-out;
 }
 
 .logo-anim-overlay.fade-out {
@@ -1671,7 +1671,7 @@ body {
 }
 
 .logo-anim-stage.disappearing {
-  animation: logoZoomAndDisappear 0.3s ease-out forwards !important;
+  animation: logoZoomAndDisappear 0.7s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
 }
 
 /* Part A: Flower (Lotus at top center) - Starts top (-250px), small (0.3 scale), slides down & enlarges to 1.0 */
@@ -1683,7 +1683,7 @@ body {
   height: 100%;
   object-fit: contain;
   transform-origin: 50% 15%;
-  animation: partAFlowerIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: partAFlowerIn 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Part B: Right Hand & Leaf - Starts right (+350px), enlarged (1.6 scale), slides left & downsizes to 1.0 */
@@ -1695,7 +1695,7 @@ body {
   height: 100%;
   object-fit: contain;
   transform-origin: 70% 40%;
-  animation: partBRightHandIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: partBRightHandIn 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Part C: Left Hand & Leaf - Starts left (-350px), enlarged (1.6 scale), slides right & downsizes to 1.0 */
@@ -1707,7 +1707,7 @@ body {
   height: 100%;
   object-fit: contain;
   transform-origin: 30% 40%;
-  animation: partCLeftHandIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: partCLeftHandIn 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Part D: Swagatham Text - Starts bottom (+250px), enlarged (1.6 scale), slides up & downsizes to 1.0 */
@@ -1719,7 +1719,7 @@ body {
   height: 100%;
   object-fit: contain;
   transform-origin: 50% 85%;
-  animation: partDTextIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: partDTextIn 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Keyframes for Part A */

@@ -76,7 +76,161 @@ function setSetting(key, value) {
   db.prepare('INSERT INTO system_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
 }
 
-// SMTP Config & Email Dispatcher
+// Timezone helper: Default all email timestamps to Indian Standard Time (IST)
+function formatIST(dateInput) {
+  if (!dateInput) return 'N/A';
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return String(dateInput);
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  }) + ' (IST)';
+}
+
+// Branded HTML Email Generator with Light Header, Transparent Swagatham Logo Graphic, Transparent Data Layer & Full-Card Watermark
+function buildEmailHtml({
+  badgeText = 'NOTIFICATION',
+  badgeBg = '#e0e7ff',
+  badgeColor = '#3730a3',
+  title = 'Swagatham Notification',
+  subtitle = 'Visitor Access Management System',
+  greeting = 'Hello,',
+  messageHtml = '',
+  details = null,
+  actionUrl = null,
+  actionText = 'Open VAMS Portal',
+  footerNote = null,
+  logoTextSrc = 'cid:swagatham_logo_text',
+  watermarkSrc = 'cid:swagatham_watermark'
+}) {
+  const detailsRows = details && details.length ? details.map(d => `
+    <tr>
+      <td style="padding: 11px 16px; font-weight: 600; color: #64748b; width: 38%; border-bottom: 1px solid rgba(226, 232, 240, 0.6); font-size: 13px;">${d.label}</td>
+      <td style="padding: 11px 16px; color: ${d.highlight ? '#2563eb' : '#0f172a'}; font-weight: ${d.highlight ? '700' : '600'}; border-bottom: 1px solid rgba(226, 232, 240, 0.6); font-size: ${d.highlight ? '15px' : '13px'};">${d.value}</td>
+    </tr>
+  `).join('') : '';
+
+  const detailsBlock = detailsRows ? `
+    <table style="width: 100%; border-collapse: collapse; margin: 22px 0; background: rgba(248, 250, 252, 0.45); border-radius: 12px; overflow: hidden; border: 1px solid rgba(226, 232, 240, 0.75);">
+      ${detailsRows}
+    </table>
+  ` : '';
+
+  const actionBlock = actionUrl ? `
+    <div style="text-align: center; margin: 28px 0 16px 0;">
+      <a href="${actionUrl}" style="background: linear-gradient(135deg, #6d4ee8 0%, #4c1d95 100%); color: #ffffff !important; padding: 13px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block; box-shadow: 0 4px 14px rgba(109, 78, 232, 0.35); text-transform: uppercase; letter-spacing: 0.5px;">${actionText}</a>
+    </div>
+  ` : '';
+
+  return `<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<!--[if gte mso 9]>
+<xml>
+  <o:OfficeDocumentSettings>
+    <o:AllowPNG/>
+    <o:PixelsPerInch>96</o:PixelsPerInch>
+  </o:OfficeDocumentSettings>
+</xml>
+<![endif]-->
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #f5f3ff;
+    font-family: 'Plus Jakarta Sans', Arial, -apple-system, sans-serif;
+    color: #1e293b;
+    -webkit-font-smoothing: antialiased;
+  }
+</style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f5f3ff; font-family: 'Plus Jakarta Sans', Arial, -apple-system, sans-serif; color: #1e293b;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f3ff; padding: 24px 10px;">
+    <tr>
+      <td align="center">
+        <!-- MAIN OUTER CARD CONTAINER WITH WATERMARK COVERING FULL EMAIL -->
+        <table width="100%" cellpadding="0" cellspacing="0" background="${watermarkSrc}" style="max-width: 580px; background-color: #ffffff; background-image: url('${watermarkSrc}'); background-repeat: no-repeat; background-position: center 100px; background-size: 440px auto; border-radius: 20px; overflow: hidden; box-shadow: 0 12px 28px -5px rgba(109, 78, 232, 0.12), 0 8px 10px -6px rgba(0,0,0,0.04); border: 1px solid #e0d7fe;">
+          <!--[if gte mso 9]>
+          <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:580px;">
+            <v:fill type="frame" src="${watermarkSrc}" color="#ffffff" />
+            <v:textbox inset="0,0,0,0">
+          <![endif]-->
+
+          <!-- LIGHT TOP HEADER WITH TRANSPARENT LOGO GRAPHIC -->
+          <tr>
+            <td style="background: linear-gradient(180deg, #f5f0ff 0%, rgba(255, 255, 255, 0.7) 100%); padding: 32px 24px 18px 24px; text-align: center; border-bottom: 1px solid rgba(237, 233, 254, 0.8);">
+              <img src="${logoTextSrc}" alt="Swagatham" width="230" style="display: block; margin: 0 auto; max-width: 230px; width: 230px; height: auto; border: 0; background: transparent;" />
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 2.5px; color: #6d4ee8; font-weight: 700; margin-top: 8px;">${subtitle}</div>
+            </td>
+          </tr>
+
+          <!-- MAIN CONTENT BODY (TRANSPARENT LAYERS FOR VISIBLE WATERMARK) -->
+          <tr>
+            <td style="padding: 32px 28px; background: transparent;">
+
+              ${badgeText ? `
+                <div style="margin-bottom: 16px;">
+                  <span style="display: inline-block; padding: 5px 14px; background-color: ${badgeBg}; color: ${badgeColor}; border-radius: 9999px; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;">${badgeText}</span>
+                </div>
+              ` : ''}
+
+              <h2 style="margin: 0 0 16px 0; color: #0f172a; font-size: 20px; font-weight: 700;">${title}</h2>
+              <p style="margin: 0 0 14px 0; font-size: 14px; color: #334155; line-height: 1.6;">${greeting}</p>
+              
+              <div style="font-size: 14px; color: #334155; line-height: 1.6;">
+                ${messageHtml}
+              </div>
+
+              ${detailsBlock}
+              ${actionBlock}
+
+              ${footerNote ? `<p style="font-size: 12px; color: #64748b; margin-top: 20px; font-style: italic; line-height: 1.5;">${footerNote}</p>` : ''}
+
+            </td>
+          </tr>
+
+          <!-- BRANDED SIGNATURE & FOOTER WITH SWAGATHAM VMS -->
+          <tr>
+            <td style="background-color: rgba(245, 243, 255, 0.75); padding: 24px 28px; border-top: 1px solid rgba(237, 233, 254, 0.8); text-align: center;">
+              <div style="margin-bottom: 8px;">
+                <img src="${logoTextSrc}" alt="Swagatham VMS" width="130" style="display: inline-block; vertical-align: middle; max-width: 130px; height: auto; border: 0; background: transparent;" />
+                <span style="display: inline-block; vertical-align: middle; font-size: 12px; font-weight: 800; color: #6d4ee8; margin-left: 6px; padding: 2px 8px; background: #ede9fe; border-radius: 4px; letter-spacing: 1px;">VMS</span>
+              </div>
+              <div style="font-size: 12px; color: #6b21a8; font-weight: 600;">Visitor Access Management System</div>
+              
+              <div style="margin: 16px 0 12px 0; height: 1px; background: linear-gradient(90deg, transparent, #ddd6fe, transparent);"></div>
+              
+              <div style="font-size: 11px; color: #64748b; line-height: 1.6;">
+                ⏰ <strong>All times displayed in Indian Standard Time (IST, UTC+5:30)</strong><br>
+                This is an automated notification. Please do not reply directly to this email.<br>
+                Powered by Spandana Technologies • Swagatham VMS
+              </div>
+            </td>
+          </tr>
+
+          <!--[if gte mso 9]>
+            </v:textbox>
+          </v:rect>
+          <![endif]-->
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+// SMTP Config & Email Dispatcher with Auto CID Attachments
 function getSmtpConfig() {
   return {
     host: getSetting('smtp_host') || process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -106,12 +260,26 @@ async function sendEmail({ to, subject, html, text }) {
       auth: { user: config.user, pass: config.pass },
       tls: { rejectUnauthorized: false }
     });
+
+    // Auto-attach CIDs if referenced in HTML for maximum client rendering reliability
+    const attachments = [];
+    const logoTextPath = path.join(__dirname, '../../frontend/public/email_logo_text.png');
+    const watermarkPath = path.join(__dirname, '../../frontend/public/email_watermark.png');
+
+    if (html && html.includes('cid:swagatham_logo_text')) {
+      attachments.push({ filename: 'swagatham_logo_text.png', path: logoTextPath, cid: 'swagatham_logo_text' });
+    }
+    if (html && html.includes('cid:swagatham_watermark')) {
+      attachments.push({ filename: 'swagatham_watermark.png', path: watermarkPath, cid: 'swagatham_watermark' });
+    }
+
     const info = await transporter.sendMail({
       from: config.from,
       to,
       subject,
       text: text || html.replace(/<[^>]+>/g, ''),
-      html
+      html,
+      attachments
     });
     console.log(`[VAMS EMAIL SENT] ID: ${info.messageId} -> ${to}`);
     return { success: true, messageId: info.messageId };
@@ -219,6 +387,7 @@ if (!pCount) {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
+app.use(express.static(path.join(__dirname, '../../frontend/public')));
 const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
 
 function auth(req, res, next) {
@@ -403,11 +572,19 @@ app.post('/api/admin/test-email', auth, roles('ADMIN'), async (req, res) => {
   const result = await sendEmail({
     to: targetEmail,
     subject: 'Swagatham VMS - SMTP Test Email',
-    html: `<div style="font-family: sans-serif; padding: 20px; background-color: #f8fafc; border-radius: 8px;">
-      <h2 style="color: #1e3a8a;">Swagatham VMS - SMTP Verification</h2>
-      <p>Congratulations! Your Google Workspace SMTP configuration is working properly.</p>
-      <p style="color: #64748b; font-size: 14px;">Sent at: ${new Date().toLocaleString()}</p>
-    </div>`
+    html: buildEmailHtml({
+      badgeText: 'SMTP VERIFIED',
+      badgeBg: '#ecfdf5',
+      badgeColor: '#047857',
+      title: 'Swagatham VMS - SMTP Verification',
+      greeting: `Hello ${req.user.name || 'Admin'},`,
+      messageHtml: `<p>Congratulations! Your Google Workspace SMTP configuration is working properly.</p>`,
+      details: [
+        { label: 'Recipient Email', value: targetEmail },
+        { label: 'Dispatched At (IST)', value: formatIST(new Date()), highlight: true },
+        { label: 'Status', value: 'Active & Verified', highlight: true }
+      ]
+    })
   });
   if (result.success) {
     res.json({ message: result.simulated ? 'Email simulated (SMTP user/pass not configured yet)' : 'Test email dispatched successfully!', ...result });
@@ -533,17 +710,24 @@ app.post('/api/master/users', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) =>
     sendEmail({
       to: cleanEmail,
       subject: `Welcome to Swagatham VMS - Your Login Credentials`,
-      html: `<div style="font-family: sans-serif; padding: 20px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
-        <h2 style="color: #1e3a8a; margin-top: 0;">Welcome to Swagatham VMS</h2>
-        <p>Hello <strong>${name.trim()}</strong>,</p>
-        <p>Your account has been created with role: <strong style="color: #2563eb;">${userRole}</strong>.</p>
-        <div style="background-color: #ffffff; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 15px 0;">
-          <p style="margin: 4px 0;"><strong>Username / Email:</strong> <code>${userStr}</code> (or <code>${cleanEmail}</code>)</p>
-          <p style="margin: 4px 0;"><strong>Password:</strong> <code>${passStr}</code></p>
-          <p style="margin: 4px 0;"><strong>System URL:</strong> <a href="https://vams.spandanatech.in">https://vams.spandanatech.in</a></p>
-        </div>
-        <p style="color: #64748b; font-size: 13px;">Please log in using your Username or Email address with the password above.</p>
-      </div>`
+      html: buildEmailHtml({
+        badgeText: 'ACCOUNT CREATED',
+        badgeBg: '#eff6ff',
+        badgeColor: '#1d4ed8',
+        title: 'Welcome to Swagatham VMS',
+        greeting: `Hello <strong>${name.trim()}</strong>,`,
+        messageHtml: `<p>Your account has been created with role: <strong style="color: #2563eb;">${userRole}</strong>.</p>
+          <p>Please log in to the Swagatham Visitor Access Management System using your credentials below.</p>`,
+        details: [
+          { label: 'Username / Email', value: `${userStr} (${cleanEmail})` },
+          { label: 'Initial Password', value: passStr, highlight: true },
+          { label: 'System Portal', value: 'https://vams.spandanatech.in' },
+          { label: 'Created At (IST)', value: formatIST(new Date()) }
+        ],
+        actionUrl: 'https://vams.spandanatech.in',
+        actionText: 'Log In to Swagatham Portal',
+        footerNote: 'Please log in using your Username or Email address with the password above and change your password upon first login.'
+      })
     }).catch(err => console.error('[VAMS EMAIL ERROR]', err));
   }
 
@@ -690,19 +874,23 @@ app.post('/api/visitors/register', auth, async (req, res) => {
     sendEmail({
       to: hostUser.email,
       subject: `[Swagatham VMS] New Visitor Request: ${name} is visiting you`,
-      html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f1f5f9; color: #1e293b;">
-        <div style="max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 24px;">
-          <h2 style="color: #2563eb; margin-top: 0;">New Visitor Approval Request</h2>
-          <p>Hello <strong>${hostUser.name}</strong>,</p>
-          <p>A visitor has been registered to meet you at reception/gate:</p>
-          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-            <tr><td style="padding: 6px; font-weight: bold;">Visitor Name:</td><td style="padding: 6px;">${name}</td></tr>
-            <tr><td style="padding: 6px; font-weight: bold;">Company:</td><td style="padding: 6px;">${company || 'N/A'}</td></tr>
-            <tr><td style="padding: 6px; font-weight: bold;">Purpose:</td><td style="padding: 6px;">${purpose || 'Visit'}</td></tr>
-          </table>
-          <p>Please log in to your Swagatham VMS Dashboard to review and single-tap approve or reject this visitor pass.</p>
-        </div>
-      </div>`
+      html: buildEmailHtml({
+        badgeText: 'ACTION REQUIRED',
+        badgeBg: '#eff6ff',
+        badgeColor: '#1d4ed8',
+        title: 'New Visitor Approval Request',
+        greeting: `Hello <strong>${hostUser.name}</strong>,`,
+        messageHtml: `<p>A visitor has been registered to meet you at reception/gate:</p>`,
+        details: [
+          { label: 'Visitor Name', value: name },
+          { label: 'Company', value: company || 'N/A' },
+          { label: 'Purpose', value: purpose || 'Visit' },
+          { label: 'Registered At (IST)', value: formatIST(new Date()) }
+        ],
+        actionUrl: 'https://vams.spandanatech.in',
+        actionText: 'Open Host Dashboard to Review',
+        footerNote: 'Please log in to your Swagatham VMS Dashboard to review and single-tap approve or reject this visitor pass.'
+      })
     }).catch(err => console.error('[VAMS EMAIL ERROR]', err));
   }
 
@@ -788,20 +976,23 @@ app.post('/api/public/register-visit', async (req, res) => {
     sendEmail({
       to: hostUser.email,
       subject: `[Swagatham VMS] Pre-Approval Request: ${name} is visiting you`,
-      html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f1f5f9; color: #1e293b;">
-        <div style="max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 24px;">
-          <h2 style="color: #2563eb; margin-top: 0;">Visitor Pre-Approval Request</h2>
-          <p>Hello <strong>${hostUser.name}</strong>,</p>
-          <p>A visitor has self-registered to meet you:</p>
-          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-            <tr><td style="padding: 6px; font-weight: bold;">Visitor Name:</td><td style="padding: 6px;">${name}</td></tr>
-            <tr><td style="padding: 6px; font-weight: bold;">Company:</td><td style="padding: 6px;">${company || 'N/A'}</td></tr>
-            <tr><td style="padding: 6px; font-weight: bold;">Purpose:</td><td style="padding: 6px;">${purpose}</td></tr>
-            <tr><td style="padding: 6px; font-weight: bold;">Expected Arrival:</td><td style="padding: 6px; color: #2563eb; font-weight: bold;">${new Date(expected_arrival_time).toLocaleString()}</td></tr>
-          </table>
-          <p>Please log in to your Swagatham VMS Host Dashboard to Single-Tap Approve, Propose New Time, or Reject this visit.</p>
-        </div>
-      </div>`
+      html: buildEmailHtml({
+        badgeText: 'PRE-APPROVAL REQUEST',
+        badgeBg: '#fef3c7',
+        badgeColor: '#92400e',
+        title: 'Visitor Pre-Approval Request',
+        greeting: `Hello <strong>${hostUser.name}</strong>,`,
+        messageHtml: `<p>A visitor has self-registered to meet you:</p>`,
+        details: [
+          { label: 'Visitor Name', value: name },
+          { label: 'Company', value: company || 'N/A' },
+          { label: 'Purpose', value: purpose },
+          { label: 'Expected Arrival (IST)', value: formatIST(expected_arrival_time), highlight: true }
+        ],
+        actionUrl: 'https://vams.spandanatech.in',
+        actionText: 'Review & Respond in Host Dashboard',
+        footerNote: 'Please log in to your Swagatham VMS Host Dashboard to Single-Tap Approve, Propose New Time, or Reject this visit.'
+      })
     });
   }
 
@@ -890,14 +1081,22 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
       sendEmail({
         to: visit.visitor_email,
         subject: `[Swagatham VMS] Your Visitor Pass is Approved! Code: ${visit.visitor_code}`,
-        html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #ecfdf5; border-radius: 8px;">
-          <h2 style="color: #059669;">Visitor Pass Approved!</h2>
-          <p>Dear <strong>${visit.visitor_name}</strong>,</p>
-          <p>Your host <strong>${visit.host_name}</strong> has approved your visit.</p>
-          <p>Your Visitor Pass Code is: <strong style="font-size: 18px; color: #2563eb;">${visit.visitor_code}</strong></p>
-          <p>Expected Arrival: ${new Date(visit.expected_arrival_time || visit.expected_checkin).toLocaleString()}</p>
-          <p>Please present this code at reception upon arrival.</p>
-        </div>`
+        html: buildEmailHtml({
+          badgeText: 'PASS APPROVED',
+          badgeBg: '#ecfdf5',
+          badgeColor: '#047857',
+          title: 'Your Visitor Pass is Approved! 🎉',
+          greeting: `Dear <strong>${visit.visitor_name}</strong>,`,
+          messageHtml: `<p>Your host <strong>${visit.host_name}</strong> has approved your visit request.</p>`,
+          details: [
+            { label: 'Visitor Pass Code', value: visit.visitor_code, highlight: true },
+            { label: 'Host Name', value: visit.host_name },
+            { label: 'Expected Arrival (IST)', value: formatIST(visit.expected_arrival_time || visit.expected_checkin), highlight: true }
+          ],
+          actionUrl: `${req.headers.origin || 'https://vams.spandanatech.in'}?passToken=${visit.pass_token}`,
+          actionText: 'View Digital Pass',
+          footerNote: 'Please present this Visitor Pass Code or digital pass at reception upon arrival.'
+        })
       });
     }
 
@@ -912,18 +1111,25 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
 
     // Send email / notification to visitor for counter confirmation
     if (visit.visitor_email) {
-      const confirmUrl = `${req.headers.origin || 'http://localhost:5173'}?confirmToken=${visit.pass_token}`;
+      const confirmUrl = `${req.headers.origin || 'https://vams.spandanatech.in'}?confirmToken=${visit.pass_token}`;
       sendEmail({
         to: visit.visitor_email,
         subject: `[Swagatham VMS] Host Proposed New Visit Time: ${visit.visitor_name}`,
-        html: `<div style="font-family: Arial, sans-serif; padding: 20px; background-color: #fffbeb; border-radius: 8px;">
-          <h2 style="color: #d97706;">Reschedule Proposal from Host</h2>
-          <p>Dear <strong>${visit.visitor_name}</strong>,</p>
-          <p>Your host <strong>${visit.host_name}</strong> proposed a new arrival time for your visit:</p>
-          <p style="font-size: 16px; font-weight: bold; color: #b45309;">New Proposed Arrival: ${new Date(proposed_time).toLocaleString()}</p>
-          <p>Please confirm if this time works for you:</p>
-          <p><a href="${confirmUrl}" style="background-color: #2563eb; color: white; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Review & Confirm Reschedule</a></p>
-        </div>`
+        html: buildEmailHtml({
+          badgeText: 'RESCHEDULE PROPOSAL',
+          badgeBg: '#fffbeb',
+          badgeColor: '#b45309',
+          title: 'Host Proposed New Visit Time',
+          greeting: `Dear <strong>${visit.visitor_name}</strong>,`,
+          messageHtml: `<p>Your host <strong>${visit.host_name}</strong> proposed a new arrival time for your visit.</p>`,
+          details: [
+            { label: 'Host Name', value: visit.host_name },
+            { label: 'New Proposed Arrival (IST)', value: formatIST(proposed_time), highlight: true }
+          ],
+          actionUrl: confirmUrl,
+          actionText: 'Review & Confirm Reschedule',
+          footerNote: 'Please click the button above to confirm if this new time works for you.'
+        })
       });
     }
 
@@ -1071,6 +1277,98 @@ app.get('/api/public/pass/:passToken', async (req, res) => {
   if (!r) return res.status(404).json({ message: 'Pass not found' });
   const qr = await QRCode.toDataURL(r.visitor_code);
   res.json({ ...r, qr });
+});
+
+// Live Interactive Email Preview Endpoint
+app.get('/api/public/email-preview', (req, res) => {
+  const type = req.query.type || 'approved';
+  const logoTextSrc = '/email_logo_text.png';
+  const watermarkSrc = '/email_watermark.png';
+  let html = '';
+
+  if (type === 'approved') {
+    html = buildEmailHtml({
+      badgeText: 'PASS APPROVED',
+      badgeBg: '#ecfdf5',
+      badgeColor: '#047857',
+      title: 'Your Visitor Pass is Approved! 🎉',
+      greeting: 'Dear <strong>Raghavendra M</strong>,',
+      messageHtml: '<p>Your host <strong>Colonel SG Jyothy</strong> has approved your visit request to the facility.</p>',
+      details: [
+        { label: 'Visitor Pass Code', value: 'VAMS-MUP5CP96', highlight: true },
+        { label: 'Host Name', value: 'Colonel SG Jyothy (Security Operations)' },
+        { label: 'Visitor Name', value: 'Raghavendra M' },
+        { label: 'Purpose', value: 'Official Client Discussion' },
+        { label: 'Expected Arrival (IST)', value: formatIST('2026-10-01T06:22:05'), highlight: true }
+      ],
+      actionUrl: '#',
+      actionText: 'View Digital Pass',
+      footerNote: 'Please present this Visitor Pass Code or digital pass at reception upon arrival.',
+      logoTextSrc,
+      watermarkSrc
+    });
+  } else if (type === 'propose_time') {
+    html = buildEmailHtml({
+      badgeText: 'RESCHEDULE PROPOSAL',
+      badgeBg: '#fffbeb',
+      badgeColor: '#b45309',
+      title: 'Host Proposed New Visit Time',
+      greeting: 'Dear <strong>Raghavendra M</strong>,',
+      messageHtml: '<p>Your host <strong>Colonel SG Jyothy</strong> proposed a new arrival time for your visit:</p>',
+      details: [
+        { label: 'Host Name', value: 'Colonel SG Jyothy' },
+        { label: 'New Proposed Arrival (IST)', value: formatIST('2026-10-01T14:30:00'), highlight: true }
+      ],
+      actionUrl: '#',
+      actionText: 'Review & Confirm Reschedule',
+      footerNote: 'Please click the button above to confirm if this new time works for you.',
+      logoTextSrc,
+      watermarkSrc
+    });
+  } else if (type === 'welcome') {
+    html = buildEmailHtml({
+      badgeText: 'ACCOUNT CREATED',
+      badgeBg: '#eff6ff',
+      badgeColor: '#1d4ed8',
+      title: 'Welcome to Swagatham VMS',
+      greeting: 'Hello <strong>Demo Host</strong>,',
+      messageHtml: '<p>Your account has been created with role: <strong style="color: #2563eb;">HOST</strong>.</p><p>Please log in to the Swagatham Visitor Access Management System using your credentials below.</p>',
+      details: [
+        { label: 'Username / Email', value: 'host.demo (host.demo@opsvision.com)' },
+        { label: 'Initial Password', value: 'host123', highlight: true },
+        { label: 'System Portal', value: 'https://vams.spandanatech.in' },
+        { label: 'Created At (IST)', value: formatIST(new Date()) }
+      ],
+      actionUrl: 'https://vams.spandanatech.in',
+      actionText: 'Log In to Swagatham Portal',
+      footerNote: 'Please log in using your Username or Email address with the password above and change your password upon first login.',
+      logoTextSrc,
+      watermarkSrc
+    });
+  } else {
+    html = buildEmailHtml({
+      badgeText: 'ACTION REQUIRED',
+      badgeBg: '#eff6ff',
+      badgeColor: '#1d4ed8',
+      title: 'New Visitor Approval Request',
+      greeting: 'Hello <strong>Colonel SG Jyothy</strong>,',
+      messageHtml: '<p>A visitor has registered to meet you at reception/gate:</p>',
+      details: [
+        { label: 'Visitor Name', value: 'Raghavendra M' },
+        { label: 'Company', value: 'Spandana Tech' },
+        { label: 'Purpose', value: 'Official Discussion' },
+        { label: 'Registered At (IST)', value: formatIST(new Date()) }
+      ],
+      actionUrl: '#',
+      actionText: 'Open Host Dashboard to Review',
+      footerNote: 'Please log in to your Swagatham VMS Dashboard to review and single-tap approve or reject this visitor pass.',
+      logoTextSrc,
+      watermarkSrc
+    });
+  }
+
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
 });
 
 app.listen(process.env.PORT || 8000, () => console.log(`OpsVision VAMS API running on http://localhost:${process.env.PORT || 8000}`));
