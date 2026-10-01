@@ -1093,9 +1093,7 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
             { label: 'Host Name', value: visit.host_name },
             { label: 'Expected Arrival (IST)', value: formatIST(visit.expected_arrival_time || visit.expected_checkin), highlight: true }
           ],
-          actionUrl: `${req.headers.origin || 'https://vams.spandanatech.in'}?passToken=${visit.pass_token}`,
-          actionText: 'View Digital Pass',
-          footerNote: 'Please present this Visitor Pass Code or digital pass at reception upon arrival.'
+          footerNote: 'Please present this Visitor Pass Code at reception upon arrival.'
         })
       });
     }
@@ -1301,9 +1299,7 @@ app.get('/api/public/email-preview', (req, res) => {
         { label: 'Purpose', value: 'Official Client Discussion' },
         { label: 'Expected Arrival (IST)', value: formatIST('2026-10-01T06:22:05'), highlight: true }
       ],
-      actionUrl: '#',
-      actionText: 'View Digital Pass',
-      footerNote: 'Please present this Visitor Pass Code or digital pass at reception upon arrival.',
+      footerNote: 'Please present this Visitor Pass Code at reception upon arrival.',
       logoTextSrc,
       watermarkSrc
     });
