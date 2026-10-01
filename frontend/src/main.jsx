@@ -147,14 +147,15 @@ function LogoAnimationOverlay({ onComplete }) {
   }, [onComplete]);
 
   useEffect(() => {
-    // Stage 1: Convergence (0ms - 800ms)
-    // Stage 2: Zoom & vanish (800ms - 1100ms)
-    const timer1 = setTimeout(() => setDisappearing(true), 800);
-    const timer2 = setTimeout(() => setFadeOut(true), 1000);
-    // Stage 3: Remove overlay completely from DOM (1100ms)
+    // Stage 1: Convergence (0ms - 1500ms)
+    // Stage 2: Hold merged logo (1500ms - 1900ms)
+    // Stage 3: Zoom & vanish (1900ms - 2600ms)
+    const timer1 = setTimeout(() => setDisappearing(true), 1900);
+    const timer2 = setTimeout(() => setFadeOut(true), 2300);
+    // Stage 4: Remove overlay completely from DOM (2600ms)
     const timer3 = setTimeout(() => {
       if (onCompleteRef.current) onCompleteRef.current();
-    }, 1100);
+    }, 2600);
 
     return () => {
       clearTimeout(timer1);
