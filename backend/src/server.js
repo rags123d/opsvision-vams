@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,actor
 CREATE TABLE IF NOT EXISTS pass_state_history(id INTEGER PRIMARY KEY AUTOINCREMENT,visit_id INTEGER NOT NULL,from_status TEXT,to_status TEXT NOT NULL,actor_id INTEGER,actor_type TEXT NOT NULL,notes TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,code TEXT UNIQUE,description TEXT,active INTEGER DEFAULT 1,color TEXT DEFAULT '#3b82f6');
 CREATE TABLE IF NOT EXISTS purposes(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT,active INTEGER DEFAULT 1,color TEXT DEFAULT '#3b82f6');
-CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,type TEXT NOT NULL,title TEXT NOT NULL,message TEXT NOT NULL,read INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,link_id INTEGER);
+CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,target_role TEXT,type TEXT NOT NULL,title TEXT NOT NULL,message TEXT NOT NULL,read INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,link_id INTEGER);
 CREATE TABLE IF NOT EXISTS system_settings(key TEXT PRIMARY KEY,value TEXT);
 `;
 db.exec(schema);
@@ -61,6 +61,10 @@ try { db.exec("ALTER TABLE visits ADD COLUMN rejection_reason TEXT"); } catch(e)
 try { db.exec("ALTER TABLE visits ADD COLUMN created_by INTEGER"); } catch(e) {}
 try { db.exec("ALTER TABLE visits ADD COLUMN approved_by INTEGER"); } catch(e) {}
 try { db.exec("ALTER TABLE visits ADD COLUMN pass_token TEXT"); } catch(e) {}
+
+// Notification target_role Migration
+try { db.exec("ALTER TABLE notifications ADD COLUMN target_role TEXT"); } catch(e) {}
+try { db.exec("UPDATE notifications SET target_role='GUARD_RECEPTION' WHERE (type='VISIT_APPROVED' OR type='VISIT_REJECTED') AND (target_role IS NULL OR target_role='')"); } catch(e) {}
 
 // Normalize legacy statuses
 try { db.exec("UPDATE visits SET status='PENDING_HOST_REVIEW' WHERE status='PENDING_APPROVAL' OR status='PENDING'"); } catch(e) {}
@@ -290,10 +294,10 @@ async function sendEmail({ to, subject, html, text }) {
 }
 
 // In-App Notification Helper
-function createNotification({ user_id = null, type, title, message, link_id = null }) {
+function createNotification({ user_id = null, target_role = null, type, title, message, link_id = null }) {
   try {
-    db.prepare('INSERT INTO notifications(user_id,type,title,message,link_id) VALUES(?,?,?,?,?)').run(
-      user_id, type, title, message, link_id
+    db.prepare('INSERT INTO notifications(user_id,target_role,type,title,message,link_id) VALUES(?,?,?,?,?,?)').run(
+      user_id, target_role, type, title, message, link_id
     );
   } catch (err) {
     console.error('[VAMS NOTIFICATION ERROR]', err.message);
@@ -531,10 +535,33 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email } });
 });
 
-// Notifications API (Scoped to User)
+// Notifications API (Scoped to User Role & Permissions)
 app.get('/api/notifications', auth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM notifications WHERE user_id IS NULL OR user_id=? ORDER BY id DESC LIMIT 50').all(req.user.id);
-  const unreadCount = db.prepare('SELECT COUNT(*) c FROM notifications WHERE (user_id IS NULL OR user_id=?) AND read=0').get(req.user.id).c;
+  const { id, role } = req.user;
+  let rows, unreadCount;
+
+  if (role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'CEO') {
+    // CEO, Admin and Superadmin can see ALL notifications
+    rows = db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT 50').all();
+    unreadCount = db.prepare('SELECT COUNT(*) c FROM notifications WHERE read=0').get().c;
+  } else if (role === 'GUARD' || role === 'RECEPTION') {
+    // Guard and Receptionist see notifications directed to them or targeted to GUARD/RECEPTION
+    rows = db.prepare(`
+      SELECT * FROM notifications 
+      WHERE user_id = ? OR target_role = 'GUARD_RECEPTION' OR target_role = 'GUARD' OR target_role = 'RECEPTION'
+      ORDER BY id DESC LIMIT 50
+    `).all(id);
+    unreadCount = db.prepare(`
+      SELECT COUNT(*) c FROM notifications 
+      WHERE (user_id = ? OR target_role = 'GUARD_RECEPTION' OR target_role = 'GUARD' OR target_role = 'RECEPTION') 
+        AND read=0
+    `).get(id).c;
+  } else {
+    // Hosts and Employees see ONLY notifications explicitly sent to their user_id
+    rows = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50').all(id);
+    unreadCount = db.prepare('SELECT COUNT(*) c FROM notifications WHERE user_id = ? AND read=0').get(id).c;
+  }
+
   res.json({ notifications: rows, unreadCount });
 });
 
@@ -544,7 +571,14 @@ app.put('/api/notifications/:id/read', auth, (req, res) => {
 });
 
 app.put('/api/notifications/read-all', auth, (req, res) => {
-  db.prepare('UPDATE notifications SET read=1 WHERE user_id IS NULL OR user_id=?').run(req.user.id);
+  const { id, role } = req.user;
+  if (role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'CEO') {
+    db.prepare('UPDATE notifications SET read=1').run();
+  } else if (role === 'GUARD' || role === 'RECEPTION') {
+    db.prepare(`UPDATE notifications SET read=1 WHERE user_id = ? OR target_role IN ('GUARD_RECEPTION', 'GUARD', 'RECEPTION')`).run(id);
+  } else {
+    db.prepare('UPDATE notifications SET read=1 WHERE user_id = ?').run(id);
+  }
   res.json({ message: 'All notifications marked as read' });
 });
 
@@ -1067,9 +1101,9 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
     logPassStateChange(visit.id, visit.status, newStatus, req.user.id, req.user.role, notes || 'Approved');
     audit(req.user.id, 'APPROVE_VISIT', 'VISIT', visit.id);
 
-    // Notify Reception
+    // Notify Guard & Receptionist on Approval
     createNotification({
-      user_id: null,
+      target_role: 'GUARD_RECEPTION',
       type: 'VISIT_APPROVED',
       title: '✅ Visitor Pass Approved',
       message: `${visit.visitor_name} has been approved by host ${visit.host_name}.`,
@@ -1140,9 +1174,9 @@ app.post('/api/visits/:id/host-action', auth, roles('HOST', 'EMPLOYEE', 'ADMIN',
     logPassStateChange(visit.id, visit.status, newStatus, req.user.id, req.user.role, notes.trim());
     audit(req.user.id, 'REJECT_VISIT', 'VISIT', visit.id, notes.trim());
 
-    // Notify Reception
+    // Notify Guard & Receptionist on Rejection
     createNotification({
-      user_id: null,
+      target_role: 'GUARD_RECEPTION',
       type: 'VISIT_REJECTED',
       title: '❌ Visit Request Rejected',
       message: `${visit.visitor_name} was rejected by host ${visit.host_name}. Reason: ${notes}`,
@@ -1178,6 +1212,16 @@ app.post('/api/approvals/:visitId', auth, roles('HOST', 'EMPLOYEE', 'RECEPTION',
   db.prepare('UPDATE visits SET status=?, approved_by=? WHERE id=?').run(status, req.user.id, visit.id);
   logPassStateChange(visit.id, visit.status, status, req.user.id, req.user.role, notes);
   audit(req.user.id, status, 'VISIT', visit.id);
+
+  const vInfo = db.prepare('SELECT x.*, v.name visitor_name, u.name host_name FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?').get(visit.id);
+  createNotification({
+    target_role: 'GUARD_RECEPTION',
+    type: status === 'APPROVED' ? 'VISIT_APPROVED' : 'VISIT_REJECTED',
+    title: status === 'APPROVED' ? '✅ Visitor Pass Approved' : '❌ Visit Request Rejected',
+    message: status === 'APPROVED' ? `${vInfo ? vInfo.visitor_name : 'Visitor'} has been approved by host ${vInfo ? vInfo.host_name : 'Host'}.` : `${vInfo ? vInfo.visitor_name : 'Visitor'} was rejected. Reason: ${notes}`,
+    link_id: visit.id
+  });
+
   res.json({ message: `Visit ${status.toLowerCase()}` });
 });
 
