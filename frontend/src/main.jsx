@@ -5,25 +5,52 @@ import './style.css';
 const API = '/api';
 
 async function api(path, opt = {}) {
-  const token = localStorage.getItem('token');
-  const r = await fetch(API + path, {
-    ...opt,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: 'Bearer ' + token } : {}),
-      ...(opt.headers || {})
-    }
-  });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    if (r.status === 401 && token) {
-      console.warn('[VAMS AUTH] Session token expired or unauthorized. Clearing stored credentials.');
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      if (!window.location.search.includes('logout')) {
-        window.location.href = '/?logout=true&expired=true';
+  let token = localStorage.getItem('token');
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: 'Bearer ' + token } : {}),
+    ...(opt.headers || {})
+  };
+
+  let r = await fetch(API + path, { ...opt, headers });
+  
+  // If 401 Unauthorized occurs on an authenticated route, attempt silent token refresh
+  if (r.status === 401 && !path.startsWith('/auth/')) {
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (refreshToken) {
+      try {
+        const refreshRes = await fetch(API + '/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken })
+        });
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          if (refreshData.token) {
+            localStorage.setItem('token', refreshData.token);
+            if (refreshData.refreshToken) localStorage.setItem('refreshToken', refreshData.refreshToken);
+            if (refreshData.user) localStorage.setItem('user', JSON.stringify(refreshData.user));
+            
+            // Retry original request with new access token
+            headers.Authorization = 'Bearer ' + refreshData.token;
+            r = await fetch(API + path, { ...opt, headers });
+          }
+        } else {
+          throw new Error('Refresh failed');
+        }
+      } catch (e) {
+        console.warn('[VAMS AUTH] Silent session refresh failed. Clearing credentials.');
+        localStorage.clear();
+        if (!window.location.search.includes('logout')) {
+          window.location.href = '/?logout=true&expired=true';
+        }
+        throw new Error('Session expired. Please sign in again.');
       }
     }
+  }
+
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
     throw Error(d.message || 'Request failed');
   }
   return d;
@@ -542,6 +569,7 @@ function HostRegisterModal({ onClose, onRegistered }) {
       const d = await r.json();
       if (!r.ok) throw new Error(d.message || 'Host registration failed');
       localStorage.setItem('token', d.token);
+      if (d.refreshToken) localStorage.setItem('refreshToken', d.refreshToken);
       localStorage.setItem('user', JSON.stringify(d.user));
       setMsg('Host account created!');
       setTimeout(() => {
@@ -613,6 +641,7 @@ function Login({ onLogin }) {
         body: JSON.stringify({ username, password })
       });
       localStorage.setItem('token', d.token);
+      if (d.refreshToken) localStorage.setItem('refreshToken', d.refreshToken);
       localStorage.setItem('user', JSON.stringify(d.user));
       onLogin(d.user);
     } catch (e) {
@@ -674,9 +703,92 @@ function Login({ onLogin }) {
   );
 }
 
-// App Shell with Left Sidebar & Reschedule Confirm Router
+// App Shell with Left Sidebar & Persistent Session Auth Router
 function App() {
   const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
+  const [initializing, setInitializing] = useState(true);
+
+  useEffect(() => {
+    // Enable browser persistent storage API to prevent mobile OS eviction
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().then(granted => {
+        console.log('[VAMS PWA] Persistent storage status:', granted ? 'Granted' : 'Denied');
+      }).catch(() => {});
+    }
+
+    // App launch silent session validation
+    const validateSession = async () => {
+      const storedToken = localStorage.getItem('token');
+      const storedRefreshToken = localStorage.getItem('refreshToken');
+
+      if (storedToken || storedRefreshToken) {
+        try {
+          const res = await fetch('/api/auth/me', {
+            headers: {
+              ...(storedToken ? { Authorization: 'Bearer ' + storedToken } : {}),
+              ...(storedRefreshToken ? { 'X-Refresh-Token': storedRefreshToken } : {})
+            }
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.user) {
+              setUser(data.user);
+              localStorage.setItem('user', JSON.stringify(data.user));
+              if (data.token) localStorage.setItem('token', data.token);
+            }
+          } else if (storedRefreshToken) {
+            // Access token expired, perform silent refresh with refresh token
+            const refRes = await fetch('/api/auth/refresh', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ refreshToken: storedRefreshToken })
+            });
+
+            if (refRes.ok) {
+              const refData = await refRes.json();
+              setUser(refData.user);
+              localStorage.setItem('user', JSON.stringify(refData.user));
+              localStorage.setItem('token', refData.token);
+              if (refData.refreshToken) localStorage.setItem('refreshToken', refData.refreshToken);
+            } else {
+              localStorage.clear();
+              setUser(null);
+            }
+          } else {
+            localStorage.clear();
+            setUser(null);
+          }
+        } catch (err) {
+          console.warn('[VAMS AUTH] Offline session check fallback:', err.message);
+          // Retain local offline session if token exists
+        }
+      } else {
+        setUser(null);
+      }
+      setInitializing(false);
+    };
+
+    validateSession();
+  }, []);
+
+  const handleLogout = async () => {
+    const refreshToken = localStorage.getItem('refreshToken');
+    const token = localStorage.getItem('token');
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: 'Bearer ' + token } : {})
+        },
+        body: JSON.stringify({ refreshToken })
+      });
+    } catch (e) {}
+    localStorage.clear();
+    setUser(null);
+  };
+
   const params = new URLSearchParams(window.location.search);
   const confirmToken = params.get('confirmToken');
 
@@ -684,15 +796,37 @@ function App() {
     return <PublicVisitorRescheduleConfirmScreen token={confirmToken} onDone={() => { window.location.href = '/'; }} />;
   }
 
+  if (initializing) {
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        background: '#0f172a',
+        color: '#ffffff'
+      }}>
+        <img src="/logo.png" alt="Swagatham Logo" style={{ width: '130px', height: 'auto', marginBottom: '24px' }} />
+        <div style={{
+          width: '32px',
+          height: '32px',
+          border: '3px solid rgba(255,255,255,0.15)',
+          borderTopColor: '#6d4ee8',
+          borderRadius: '50%',
+          animation: 'vams-spin 0.7s linear infinite'
+        }} />
+        <style>{`@keyframes vams-spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
   if (!user) return <Login onLogin={setUser} />;
   return (
     <Shell
       user={user}
       setUser={setUser}
-      logout={() => {
-        localStorage.clear();
-        setUser(null);
-      }}
+      logout={handleLogout}
     />
   );
 }

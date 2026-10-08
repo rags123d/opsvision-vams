@@ -8,6 +8,7 @@ import QRCode from 'qrcode';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 
 dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY AUTOINCREMENT,name
 CREATE TABLE IF NOT EXISTS purposes(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT,active INTEGER DEFAULT 1,color TEXT DEFAULT '#3b82f6');
 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,target_role TEXT,type TEXT NOT NULL,title TEXT NOT NULL,message TEXT NOT NULL,read INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,link_id INTEGER);
 CREATE TABLE IF NOT EXISTS system_settings(key TEXT PRIMARY KEY,value TEXT);
+CREATE TABLE IF NOT EXISTS refresh_tokens(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, token TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
 `;
 db.exec(schema);
 
@@ -461,6 +463,46 @@ function dashboard(user = null) {
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'OpsVision VAMS' }));
 
 // Public Host Registration Endpoint (Self Registration by Host)
+// Helper: Cookie Parser & Persistent Refresh Tokens
+function parseCookies(req) {
+  const list = {};
+  const rc = req.headers.cookie;
+  if (rc) {
+    rc.split(';').forEach(cookie => {
+      const parts = cookie.split('=');
+      list[parts.shift().trim()] = decodeURIComponent(parts.join('='));
+    });
+  }
+  return list;
+}
+
+function setRefreshCookie(res, refreshToken) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const cookieOpts = [
+    `vams_refresh_token=${refreshToken}`,
+    'Path=/',
+    'HttpOnly',
+    'Max-Age=' + (90 * 24 * 60 * 60), // 90 days sliding window
+    'SameSite=Lax',
+    isProd ? 'Secure' : ''
+  ].filter(Boolean).join('; ');
+  res.setHeader('Set-Cookie', cookieOpts);
+}
+
+function clearRefreshCookie(res) {
+  res.setHeader('Set-Cookie', 'vams_refresh_token=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax');
+}
+
+function createRefreshTokenForUser(userId) {
+  const token = crypto.randomBytes(40).toString('hex');
+  const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+  db.prepare('INSERT INTO refresh_tokens(user_id, token, expires_at) VALUES(?, ?, ?)').run(userId, token, expiresAt);
+  try {
+    db.prepare("DELETE FROM refresh_tokens WHERE expires_at < CURRENT_TIMESTAMP").run();
+  } catch(e) {}
+  return token;
+}
+
 app.post('/api/auth/register-host', (req, res) => {
   const { name, email, password, department, phone } = req.body;
   if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required' });
@@ -478,48 +520,18 @@ app.post('/api/auth/register-host', (req, res) => {
   const newUserId = r.lastInsertRowid;
   audit(newUserId, 'REGISTER_HOST', 'USER', newUserId, `New host registered: ${name}`);
 
-  const token = jwt.sign({ id: newUserId, username, name, role: 'HOST', department: department || 'General', email: cleanEmail }, secret, { expiresIn: '8h' });
+  const userPayload = { id: newUserId, username, name, role: 'HOST', department: department || 'General', email: cleanEmail };
+  const token = jwt.sign(userPayload, secret, { expiresIn: '8h' });
+  const refreshToken = createRefreshTokenForUser(newUserId);
+  setRefreshCookie(res, refreshToken);
+
   res.status(201).json({
     message: 'Host account registered successfully!',
     token,
-    user: { id: newUserId, username, name, role: 'HOST', department: department || 'General', email: cleanEmail }
+    refreshToken,
+    user: userPayload
   });
 });
-
-// Unique Username Generator Helper
-function generateUniqueUsername(desiredUsername, email, excludeUserId = null) {
-  let base = '';
-  if (desiredUsername && desiredUsername.trim()) {
-    base = desiredUsername.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
-  } else if (email && email.trim()) {
-    base = email.trim().toLowerCase().split('@')[0].replace(/[^a-z0-9_.-]/g, '');
-  }
-  if (!base) base = 'user';
-
-  let sql = 'SELECT id FROM users WHERE LOWER(username)=?';
-  const params = [base];
-  if (excludeUserId) {
-    sql += ' AND id!=?';
-    params.push(excludeUserId);
-  }
-  const existing = db.prepare(sql).get(...params);
-  if (!existing) return base;
-
-  let counter = 1;
-  while (counter < 1000) {
-    const candidate = `${base}${counter}`;
-    let checkSql = 'SELECT id FROM users WHERE LOWER(username)=?';
-    const checkParams = [candidate];
-    if (excludeUserId) {
-      checkSql += ' AND id!=?';
-      checkParams.push(excludeUserId);
-    }
-    const check = db.prepare(checkSql).get(...checkParams);
-    if (!check) return candidate;
-    counter++;
-  }
-  return `${base}_${Date.now()}`;
-}
 
 app.post('/api/auth/login', (req, res) => {
   const input = req.body.username ? req.body.username.trim().toLowerCase() : '';
@@ -531,8 +543,98 @@ app.post('/api/auth/login', (req, res) => {
 
   db.prepare('UPDATE users SET last_login=CURRENT_TIMESTAMP WHERE id=?').run(u.id);
 
-  const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email }, secret, { expiresIn: '8h' });
-  res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email } });
+  const userPayload = { id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email };
+  const token = jwt.sign(userPayload, secret, { expiresIn: '8h' });
+  const refreshToken = createRefreshTokenForUser(u.id);
+  setRefreshCookie(res, refreshToken);
+
+  res.json({ token, refreshToken, user: userPayload });
+});
+
+app.post('/api/auth/refresh', (req, res) => {
+  const cookies = parseCookies(req);
+  const providedToken = (req.body && req.body.refreshToken) || cookies.vams_refresh_token;
+
+  if (!providedToken) {
+    return res.status(401).json({ message: 'No refresh token provided' });
+  }
+
+  const row = db.prepare('SELECT * FROM refresh_tokens WHERE token=? AND expires_at > CURRENT_TIMESTAMP').get(providedToken);
+  if (!row) {
+    clearRefreshCookie(res);
+    return res.status(401).json({ message: 'Invalid or expired session. Please log in again.' });
+  }
+
+  const u = db.prepare('SELECT * FROM users WHERE id=?').get(row.user_id);
+  if (!u || u.active === 0) {
+    db.prepare('DELETE FROM refresh_tokens WHERE token=?').run(providedToken);
+    clearRefreshCookie(res);
+    return res.status(403).json({ message: 'Account disabled or invalid' });
+  }
+
+  // Rotate refresh token for maximum sliding session security
+  db.prepare('DELETE FROM refresh_tokens WHERE token=?').run(providedToken);
+  const newRefreshToken = createRefreshTokenForUser(u.id);
+  setRefreshCookie(res, newRefreshToken);
+
+  const userPayload = { id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email };
+  const token = jwt.sign(userPayload, secret, { expiresIn: '8h' });
+
+  db.prepare('UPDATE users SET last_login=CURRENT_TIMESTAMP WHERE id=?').run(u.id);
+
+  res.json({ token, refreshToken: newRefreshToken, user: userPayload });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const h = req.headers.authorization || '';
+  if (h && h.startsWith('Bearer ')) {
+    try {
+      const u = jwt.verify(h.replace('Bearer ', '').trim(), secret);
+      const dbUser = db.prepare('SELECT id, username, name, role, department, email, active FROM users WHERE id=?').get(u.id);
+      if (dbUser && dbUser.active !== 0) {
+        return res.json({ user: dbUser });
+      }
+    } catch (e) {}
+  }
+
+  // Attempt refresh token verification if access token expired or missing
+  const cookies = parseCookies(req);
+  const providedToken = (req.headers['x-refresh-token']) || cookies.vams_refresh_token;
+  if (providedToken) {
+    const row = db.prepare('SELECT * FROM refresh_tokens WHERE token=? AND expires_at > CURRENT_TIMESTAMP').get(providedToken);
+    if (row) {
+      const u = db.prepare('SELECT id, username, name, role, department, email, active FROM users WHERE id=?').get(row.user_id);
+      if (u && u.active !== 0) {
+        const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role, department: u.department, email: u.email }, secret, { expiresIn: '8h' });
+        return res.json({ user: u, token });
+      }
+    }
+  }
+
+  return res.status(401).json({ message: 'Unauthenticated' });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const cookies = parseCookies(req);
+  const providedToken = (req.body && req.body.refreshToken) || cookies.vams_refresh_token;
+
+  if (providedToken) {
+    try {
+      db.prepare('DELETE FROM refresh_tokens WHERE token=?').run(providedToken);
+    } catch (e) {}
+  }
+  
+  // Clear all refresh tokens if authenticated user id passed
+  const h = req.headers.authorization || '';
+  if (h && h.startsWith('Bearer ')) {
+    try {
+      const u = jwt.verify(h.replace('Bearer ', '').trim(), secret);
+      db.prepare('DELETE FROM refresh_tokens WHERE user_id=?').run(u.id);
+    } catch(e) {}
+  }
+
+  clearRefreshCookie(res);
+  res.json({ message: 'Logged out successfully' });
 });
 
 // Notifications API (Scoped to User Role & Permissions)
