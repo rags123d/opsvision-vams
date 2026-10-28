@@ -3224,6 +3224,20 @@ function MasterData() {
 
   const setField = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
+  const effectiveUsername = isHost
+    ? (form.username && form.username.trim()
+        ? form.username.trim().toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9_.-]/g, '')
+        : (form.email && form.email.trim()
+            ? form.email.trim().toLowerCase().split('@')[0].replace(/[^a-z0-9_.-]/g, '')
+            : (form.name && form.name.trim() ? form.name.trim().toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9_.-]/g, '') : '')))
+    : '';
+
+  const duplicateUser = isHost && effectiveUsername
+    ? items.find(u => (editId ? u.id !== editId : true) && u.username && u.username.toLowerCase() === effectiveUsername)
+    : null;
+
+  const isDuplicateUsername = Boolean(duplicateUser);
+
   const toBody = () => isHost
     ? { name: form.name, role: form.role || 'HOST', email: form.email, username: form.username, password: form.password, department: form.department, phone: form.phone, active: form.active }
     : isDept
@@ -3232,6 +3246,10 @@ function MasterData() {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (isDuplicateUsername) {
+      setMsg(`Error: Username "${effectiveUsername}" already exists. Please choose a different username.`);
+      return;
+    }
     if (editId) return saveEdit();
     submitAdd(e);
   };
@@ -3247,6 +3265,9 @@ function MasterData() {
 
   const submitAdd = async (e) => {
     if (!form.name || !form.name.trim()) return setMsg('Error: Name is required');
+    if (isDuplicateUsername) {
+      return setMsg(`Error: Username "${effectiveUsername}" already exists. Please choose a different username.`);
+    }
     setMsg('');
     setCreatedInfo(null);
     try {
@@ -3280,6 +3301,9 @@ function MasterData() {
 
   const saveEdit = async () => {
     if (!form.name || !form.name.trim()) return setMsg('Error: Name is required');
+    if (isDuplicateUsername) {
+      return setMsg(`Error: Username "${effectiveUsername}" already exists. Please choose a different username.`);
+    }
     try {
       const endpoint = isHost ? `/master/users/${editId}` : `/master/${tab}/${editId}`;
       await api(endpoint, { method: 'PUT', body: JSON.stringify(toBody()) });
@@ -3393,7 +3417,42 @@ function MasterData() {
                   </div>
                   <div className="form-group">
                     <label className="form-label">Username (Leave empty to auto-generate)</label>
-                    <input className="form-control" placeholder="e.g. vikram (Optional - auto-generated if blank)" value={form.username || ''} onChange={e => setField('username', e.target.value)} />
+                    <input
+                      className="form-control"
+                      placeholder="e.g. vikram (Optional - auto-generated if blank)"
+                      value={form.username || ''}
+                      onChange={e => {
+                        setField('username', e.target.value);
+                        if (msg && msg.startsWith('Error: Username')) setMsg('');
+                      }}
+                      onBlur={() => {
+                        if (isDuplicateUsername) {
+                          setMsg(`Error: Username "${effectiveUsername}" already exists. Please choose a different username.`);
+                        }
+                      }}
+                      style={isDuplicateUsername ? { borderColor: '#ef4444', backgroundColor: '#fef2f2', color: '#b91c1c' } : {}}
+                    />
+                    {isDuplicateUsername && (
+                      <div style={{
+                        marginTop: '6px',
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        backgroundColor: '#fee2e2',
+                        border: '1.5px solid #ef4444',
+                        color: '#991b1b',
+                        fontSize: '12.5px',
+                        fontWeight: '600',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        boxShadow: '0 2px 6px rgba(239, 68, 68, 0.15)'
+                      }}>
+                        <span style={{ fontSize: '15px' }}>🚫</span>
+                        <span>
+                          Username <strong>"{effectiveUsername}"</strong> already exists{duplicateUser?.name ? ` (${duplicateUser.name})` : ''}. Please choose a different username.
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <div className="form-group">
                     <label className="form-label">Login Password {editId ? '(Leave blank to keep unchanged)' : ''}</label>
@@ -3430,14 +3489,33 @@ function MasterData() {
                 <label className="checkbox-label" style={{ marginBottom: 0 }}>Active (Account enabled)</label>
               </div>
 
-              <div className="form-group full-width">
+              <div className="form-group full-width" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                 {editId ? (
                   <>
-                    <button type="submit" className="btn-primary">Save Changes</button>
-                    <button type="button" className="btn-secondary" style={{ marginLeft: '8px' }} onClick={() => { setEditId(null); resetForm(); }}>Cancel</button>
+                    <button
+                      type="submit"
+                      className="btn-primary"
+                      disabled={isDuplicateUsername}
+                      title={isDuplicateUsername ? `Username "${effectiveUsername}" already exists` : ''}
+                    >
+                      Save Changes
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => { setEditId(null); resetForm(); }}>Cancel</button>
                   </>
                 ) : (
-                  <button type="submit" className="btn-primary">Add {entity}</button>
+                  <button
+                    type="submit"
+                    className="btn-primary"
+                    disabled={isDuplicateUsername}
+                    title={isDuplicateUsername ? `Username "${effectiveUsername}" already exists` : ''}
+                  >
+                    Add {entity}
+                  </button>
+                )}
+                {isDuplicateUsername && (
+                  <span style={{ color: '#dc2626', fontSize: '12.5px', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    ⚠️ {editId ? 'Save' : 'Add User'} button deactivated: Username already exists
+                  </span>
                 )}
               </div>
             </form>

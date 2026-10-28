@@ -833,6 +833,14 @@ body {
   transform: translateY(-1px);
 }
 
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(40%);
+  transform: none !important;
+  box-shadow: none !important;
+}
+
 .btn-success {
   background: var(--success);
   color: white;

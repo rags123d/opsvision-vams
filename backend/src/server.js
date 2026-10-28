@@ -831,8 +831,20 @@ app.post('/api/master/users', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res) =>
   const userRole = role && validRoles.includes(role) ? role : 'HOST';
   const cleanEmail = email && email.trim() ? email.trim().toLowerCase() : null;
 
-  // Use accepted username if provided and unique; otherwise generate unique candidate
-  const userStr = generateUniqueUsername(username, cleanEmail);
+  // Use chosen username, or derive fallback from email prefix / name
+  let userStr = username && username.trim()
+    ? username.trim().toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9_.-]/g, '')
+    : (cleanEmail ? cleanEmail.split('@')[0].replace(/[^a-z0-9_.-]/g, '') : name.trim().toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9_.-]/g, ''));
+
+  if (!userStr) {
+    return res.status(400).json({ message: 'Please provide a valid username' });
+  }
+
+  // Check if chosen username is already taken
+  const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(username)=?').get(userStr);
+  if (existingUser) {
+    return res.status(400).json({ message: `Username "${userStr}" is already taken. Please choose a different username.` });
+  }
   const passStr = password && password.trim() ? password.trim() : (userRole.toLowerCase() + '123');
   const passHash = bcrypt.hashSync(passStr, 10);
 
@@ -886,8 +898,18 @@ app.put('/api/master/users/:id', auth, roles('ADMIN', 'SUPER_ADMIN'), (req, res)
   const userRole = role && validRoles.includes(role) ? role : d.role;
   const cleanEmail = email && email.trim() ? email.trim().toLowerCase() : null;
 
-  // Accept custom username if unique, or generate unique fallback
-  const userStr = generateUniqueUsername(username, cleanEmail, d.id);
+  // Accept custom username if provided, or retain existing
+  let userStr = username && username.trim()
+    ? username.trim().toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9_.-]/g, '')
+    : d.username;
+
+  if (!userStr) userStr = d.username;
+
+  // Check if chosen username is already taken by another user
+  const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(username)=? AND id!=?').get(userStr, d.id);
+  if (existingUser) {
+    return res.status(400).json({ message: `Username "${userStr}" is already taken by another user. Please choose a different username.` });
+  }
 
   if (password && password.trim().length > 0) {
     const passHash = bcrypt.hashSync(password.trim(), 10);
