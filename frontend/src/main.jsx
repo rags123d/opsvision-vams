@@ -146,6 +146,48 @@ const Icons = {
   )
 };
 
+// Robust ISO & IST DateTime Formatter for all timestamps (SQLite UTC or ISO strings)
+function fmtDateTime(val, withSeconds = true) {
+  if (!val) return '';
+  let s = String(val).trim();
+  // SQLite CURRENT_TIMESTAMP stores UTC without timezone markers (e.g. "YYYY-MM-DD HH:MM:SS")
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+    s = s.replace(' ', 'T') + 'Z';
+  }
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return String(val);
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(withSeconds ? { second: '2-digit' } : {}),
+    hour12: true
+  });
+}
+
+// Notification timestamp formatter in clean Indian Standard Time (IST)
+function formatNotifTime(val) {
+  if (!val) return '';
+  let s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+    s = s.replace(' ', 'T') + 'Z';
+  }
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return String(val);
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  }) + ' (IST)';
+}
+
 function StatusBadge({ status }) {
   const map = {
     INSIDE: { label: 'Checked In', cls: 'badge-inside' },
@@ -374,7 +416,7 @@ function PublicVisitorRescheduleConfirmScreen({ token, onDone }) {
               {data.proposed_arrival_time && (
                 <div className="pass-detail-item" style={{ background: '#fffbeb', padding: '10px', borderRadius: '8px', border: '1px solid #fde68a' }}>
                   <span style={{ color: '#b45309', fontWeight: 'bold' }}>Host Proposed New Time</span>
-                  <span style={{ color: '#b45309', fontWeight: 'bold' }}>{new Date(data.proposed_arrival_time).toLocaleString()}</span>
+                  <span style={{ color: '#b45309', fontWeight: 'bold' }}>{fmtDateTime(data.proposed_arrival_time)}</span>
                 </div>
               )}
             </div>
@@ -405,6 +447,507 @@ function PublicVisitorRescheduleConfirmScreen({ token, onDone }) {
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Public Host Zero-Login Direct Approval Screen
+function PublicHostApprovalScreen({ token, initialAction, onDone }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [acting, setActing] = useState(false);
+  const [result, setResult] = useState(null);
+  const [mode, setMode] = useState(initialAction === 'DECLINE' ? 'DECLINE' : 'APPROVE');
+  const [notes, setNotes] = useState('');
+  const [proposedTime, setProposedTime] = useState('');
+  const [rejectionReason, setRejectionReason] = useState(initialAction === 'DECLINE' ? 'Not available today' : '');
+  const autoExecutedRef = useRef(false);
+
+  const quickReasons = [
+    'Not available today',
+    'In meetings all day',
+    'Please reschedule visit',
+    'Out of office / on leave',
+    'Wrong host assigned'
+  ];
+
+  useEffect(() => {
+    fetch('/api/public/host-approval/' + token)
+      .then(r => r.json())
+      .then(d => {
+        if (!d.visitor_name && d.message) {
+          setErr(d.message);
+        } else {
+          setData(d);
+          // Only auto-execute if action is explicitly APPROVE
+          if (initialAction === 'APPROVE' && !autoExecutedRef.current) {
+            if (d.status === 'PENDING_HOST_REVIEW' || d.status === 'PENDING') {
+              autoExecutedRef.current = true;
+              handleSubmit('APPROVE');
+            }
+          }
+        }
+      })
+      .catch(e => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  const handleSubmit = async (actionToSubmit) => {
+    const act = actionToSubmit || mode;
+    setActing(true);
+    setErr('');
+    try {
+      let payload = { action: act };
+      if (act === 'DECLINE' || act === 'REJECT') {
+        payload.notes = rejectionReason && rejectionReason.trim() ? rejectionReason.trim() : 'Declined by host';
+      } else if (act === 'PROPOSE_TIME') {
+        if (!proposedTime) {
+          throw new Error('Please select a new proposed date and time.');
+        }
+        payload.proposed_time = proposedTime;
+        payload.notes = notes && notes.trim() ? notes.trim() : `Counter time proposed: ${proposedTime}`;
+      } else {
+        payload.notes = notes && notes.trim() ? notes.trim() : 'Approved directly by host';
+      }
+
+      const r = await fetch('/api/public/host-approval/' + token, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const res = await r.json();
+      if (!r.ok) {
+        throw new Error(res.message || 'Action could not be completed.');
+      }
+      setResult(res);
+      const refresh = await fetch('/api/public/host-approval/' + token).then(x => x.json());
+      setData(refresh);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setActing(false);
+    }
+  };
+
+  return (
+    <div className="login-screen">
+      <div className="login-card" style={{ maxWidth: '540px' }}>
+        <div className="login-brand">
+          <div className="login-logo-box">
+            <img src="/logo.png" alt="Swagatham Logo" className="login-logo-img" />
+          </div>
+          <h3>Host Visitor Authorization</h3>
+          <p>OpsVision Smart Access Gate Authorization</p>
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '36px 20px', color: '#64748b' }}>
+            <div style={{
+              width: '32px',
+              height: '32px',
+              border: '3px solid rgba(109,78,232,0.2)',
+              borderTopColor: '#6d4ee8',
+              borderRadius: '50%',
+              margin: '0 auto 16px auto',
+              animation: 'vams-spin 0.7s linear infinite'
+            }} />
+            Loading visitor verification details...
+          </div>
+        ) : err && !data ? (
+          <div>
+            <div className="alert-box alert-error" style={{ marginBottom: '20px' }}>{err}</div>
+            <button className="btn-secondary" style={{ width: '100%' }} onClick={onDone}>
+              Back to System Login
+            </button>
+          </div>
+        ) : data ? (
+          <div>
+            {err && <div className="alert-box alert-error" style={{ marginBottom: '16px' }}>{err}</div>}
+
+            {result ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '24px 16px',
+                background: result.status === 'APPROVED' ? 'rgba(5, 150, 105, 0.08)' : (result.status === 'PENDING_VISITOR_CONFIRMATION' ? 'rgba(37, 99, 235, 0.08)' : 'rgba(220, 38, 38, 0.08)'),
+                borderRadius: '14px',
+                border: `1px solid ${result.status === 'APPROVED' ? 'rgba(5, 150, 105, 0.3)' : (result.status === 'PENDING_VISITOR_CONFIRMATION' ? 'rgba(37, 99, 235, 0.3)' : 'rgba(220, 38, 38, 0.3)')}`,
+                marginBottom: '20px'
+              }}>
+                <div style={{ fontSize: '38px', marginBottom: '8px' }}>
+                  {result.status === 'APPROVED' ? '✔' : (result.status === 'PENDING_VISITOR_CONFIRMATION' ? '📅' : '✕')}
+                </div>
+                <h3 style={{
+                  color: result.status === 'APPROVED' ? '#059669' : (result.status === 'PENDING_VISITOR_CONFIRMATION' ? '#2563eb' : '#dc2626'),
+                  margin: '0 0 8px 0',
+                  fontWeight: 700
+                }}>
+                  {result.status === 'APPROVED' ? 'Visit Approved Successfully!' : (result.status === 'PENDING_VISITOR_CONFIRMATION' ? 'Counter Time Proposed!' : 'Visit Request Declined')}
+                </h3>
+                <p style={{ margin: '0 0 16px 0', color: '#475569', fontSize: '14px', lineHeight: 1.5 }}>
+                  {result.message}
+                </p>
+                {result.visitor_code && (
+                  <div style={{
+                    display: 'inline-block',
+                    background: '#ffffff',
+                    border: '1px dashed #059669',
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    fontWeight: 700,
+                    fontSize: '15px',
+                    color: '#059669',
+                    marginBottom: '14px'
+                  }}>
+                    Pass Code: {result.visitor_code}
+                  </div>
+                )}
+                <div style={{ fontSize: '12px', color: '#64748b' }}>
+                  {result.status === 'APPROVED'
+                    ? 'Security guards & reception have been alerted. Visitor can now enter upon arrival.'
+                    : (result.status === 'PENDING_VISITOR_CONFIRMATION'
+                      ? 'The visitor has been notified of the proposed time and requested to confirm.'
+                      : 'The security desk and visitor have been notified of your decision.')}
+                </div>
+              </div>
+            ) : data.status === 'APPROVED' ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '20px',
+                background: 'rgba(5, 150, 105, 0.08)',
+                borderRadius: '12px',
+                border: '1px solid rgba(5, 150, 105, 0.25)',
+                marginBottom: '20px'
+              }}>
+                <div style={{ fontSize: '32px', marginBottom: '6px' }}>✅</div>
+                <h4 style={{ color: '#059669', margin: '0 0 6px 0', fontWeight: 700 }}>Already Approved</h4>
+                <p style={{ margin: 0, fontSize: '13px', color: '#475569' }}>
+                  This visit request for <strong>{data.visitor_name}</strong> was already approved.
+                  {data.visitor_code && ` (Code: ${data.visitor_code})`}
+                </p>
+              </div>
+            ) : data.status === 'REJECTED' ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '20px',
+                background: 'rgba(220, 38, 38, 0.08)',
+                borderRadius: '12px',
+                border: '1px solid rgba(220, 38, 38, 0.25)',
+                marginBottom: '20px'
+              }}>
+                <div style={{ fontSize: '32px', marginBottom: '6px' }}>❌</div>
+                <h4 style={{ color: '#dc2626', margin: '0 0 6px 0', fontWeight: 700 }}>Already Declined</h4>
+                <p style={{ margin: 0, fontSize: '13px', color: '#475569' }}>
+                  This visit request for <strong>{data.visitor_name}</strong> was already declined.
+                  {data.rejection_reason && <><br /><span style={{ fontStyle: 'italic' }}>"{data.rejection_reason}"</span></>}
+                </p>
+              </div>
+            ) : null}
+
+            {/* Visitor Summary Details Card */}
+            <div className="pass-details-list" style={{
+              background: 'var(--bg-card-subtle)',
+              padding: '16px',
+              borderRadius: '12px',
+              marginBottom: '20px',
+              border: '1px solid rgba(226, 232, 240, 0.8)'
+            }}>
+              <div className="pass-detail-item">
+                <span>Visitor Name</span>
+                <strong style={{ fontSize: '15px', color: '#1e293b' }}>{data.visitor_name}</strong>
+              </div>
+              <div className="pass-detail-item">
+                <span>Company / Org</span>
+                <span>{data.company || 'Individual Visitor'}</span>
+              </div>
+              <div className="pass-detail-item">
+                <span>Purpose of Visit</span>
+                <strong style={{ color: '#6d4ee8' }}>{data.purpose}</strong>
+              </div>
+              <div className="pass-detail-item">
+                <span>Expected Arrival</span>
+                <span>{fmtDateTime(data.expected_arrival_time || data.expected_checkin || data.visit_created_at)}</span>
+              </div>
+              <div className="pass-detail-item">
+                <span>Mobile Number</span>
+                <span>{data.visitor_mobile || 'N/A'}</span>
+              </div>
+              {data.vehicle && (
+                <div className="pass-detail-item">
+                  <span>Vehicle Number</span>
+                  <span>{data.vehicle}</span>
+                </div>
+              )}
+              <div className="pass-detail-item">
+                <span>Designated Host</span>
+                <span>{data.host_name || 'Host'} ({data.host_department || 'General'})</span>
+              </div>
+              <div className="pass-detail-item">
+                <span>Current Status</span>
+                <StatusBadge status={data.status} />
+              </div>
+            </div>
+
+            {/* Decision Controls (when not yet actioned and no recent result) */}
+            {!result && (data.status === 'PENDING_HOST_REVIEW' || data.status === 'PENDING_APPROVAL' || data.status === 'PENDING') && (
+              <div>
+                {/* Action Mode Toggle Tabs */}
+                <div style={{
+                  display: 'flex',
+                  gap: '6px',
+                  marginBottom: '16px',
+                  background: 'rgba(241, 245, 249, 0.9)',
+                  padding: '4px',
+                  borderRadius: '10px'
+                }}>
+                  <button
+                    type="button"
+                    style={{
+                      flex: 1,
+                      padding: '9px 8px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                      background: mode === 'DECLINE' ? '#e11d48' : 'transparent',
+                      color: mode === 'DECLINE' ? '#ffffff' : '#64748b'
+                    }}
+                    onClick={() => setMode('DECLINE')}
+                  >
+                    ✕ Decline
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      flex: 1.2,
+                      padding: '9px 8px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                      background: mode === 'PROPOSE_TIME' ? '#2563eb' : 'transparent',
+                      color: mode === 'PROPOSE_TIME' ? '#ffffff' : '#64748b'
+                    }}
+                    onClick={() => setMode('PROPOSE_TIME')}
+                  >
+                    📅 Propose New Time
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      flex: 1,
+                      padding: '9px 8px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                      background: mode === 'APPROVE' ? '#059669' : 'transparent',
+                      color: mode === 'APPROVE' ? '#ffffff' : '#64748b'
+                    }}
+                    onClick={() => setMode('APPROVE')}
+                  >
+                    ✔ Approve
+                  </button>
+                </div>
+
+                {mode === 'DECLINE' && (
+                  <div style={{
+                    padding: '16px',
+                    borderRadius: '12px',
+                    background: 'rgba(225, 29, 72, 0.05)',
+                    border: '1px solid rgba(225, 29, 72, 0.2)',
+                    marginBottom: '16px'
+                  }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#0f172a', marginBottom: '8px' }}>
+                      Reason for Declining:
+                    </label>
+
+                    {/* Quick Reason Chips */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+                      {quickReasons.map(r => (
+                        <button
+                          key={r}
+                          type="button"
+                          style={{
+                            padding: '5px 10px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            borderRadius: '9999px',
+                            border: `1px solid ${rejectionReason === r ? '#e11d48' : '#cbd5e1'}`,
+                            background: rejectionReason === r ? '#fff1f2' : '#ffffff',
+                            color: rejectionReason === r ? '#e11d48' : '#475569',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => setRejectionReason(r)}
+                        >
+                          {r}
+                        </button>
+                      ))}
+                    </div>
+
+                    <input
+                      type="text"
+                      placeholder="Or specify custom decline reason..."
+                      value={rejectionReason}
+                      onChange={e => setRejectionReason(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '13px',
+                        marginBottom: '14px',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+
+                    <button
+                      className="btn-secondary"
+                      style={{
+                        width: '100%',
+                        backgroundColor: '#e11d48',
+                        color: '#ffffff',
+                        borderColor: '#e11d48',
+                        padding: '12px',
+                        fontSize: '14px',
+                        fontWeight: 800,
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(225, 29, 72, 0.3)'
+                      }}
+                      disabled={acting}
+                      onClick={() => handleSubmit('DECLINE')}
+                    >
+                      {acting ? 'Declining Visit...' : '✕ Confirm Decline'}
+                    </button>
+                  </div>
+                )}
+
+                {mode === 'PROPOSE_TIME' && (
+                  <div style={{
+                    padding: '16px',
+                    borderRadius: '12px',
+                    background: 'rgba(37, 99, 235, 0.05)',
+                    border: '1px solid rgba(37, 99, 235, 0.2)',
+                    marginBottom: '16px'
+                  }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#0f172a', marginBottom: '6px' }}>
+                      Proposed New Arrival Date & Time:
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={proposedTime}
+                      onChange={e => setProposedTime(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '13px',
+                        marginBottom: '12px',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#64748b', marginBottom: '6px' }}>
+                      Message / Note for Visitor (Optional):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Please meet me at 3:30 PM instead due to a prior meeting"
+                      value={notes}
+                      onChange={e => setNotes(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '13px',
+                        marginBottom: '14px',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <button
+                      className="btn-primary"
+                      style={{
+                        width: '100%',
+                        backgroundColor: '#2563eb',
+                        color: '#ffffff',
+                        padding: '12px',
+                        fontSize: '14px',
+                        fontWeight: 800,
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
+                      }}
+                      disabled={acting || !proposedTime}
+                      onClick={() => handleSubmit('PROPOSE_TIME')}
+                    >
+                      {acting ? 'Sending Proposed Time...' : '📅 Send Proposed New Time'}
+                    </button>
+                  </div>
+                )}
+
+                {mode === 'APPROVE' && (
+                  <div style={{
+                    padding: '16px',
+                    borderRadius: '12px',
+                    background: 'rgba(5, 150, 105, 0.05)',
+                    border: '1px solid rgba(5, 150, 105, 0.2)',
+                    marginBottom: '16px'
+                  }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#0f172a', marginBottom: '6px' }}>
+                      Host Note / Gate Instructions (Optional):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Please guide visitor to 2nd floor conference room"
+                      value={notes}
+                      onChange={e => setNotes(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '13px',
+                        marginBottom: '14px',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <button
+                      className="btn-primary"
+                      style={{
+                        width: '100%',
+                        backgroundColor: '#059669',
+                        padding: '12px',
+                        fontSize: '14px',
+                        fontWeight: 800,
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(5, 150, 105, 0.3)'
+                      }}
+                      disabled={acting}
+                      onClick={() => handleSubmit('APPROVE')}
+                    >
+                      {acting ? 'Approving Visit...' : '✔ Confirm Approval'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button
+              className="btn-secondary"
+              style={{ width: '100%', marginTop: '12px', fontSize: '13px' }}
+              onClick={onDone}
+            >
+              Open Host Portal / Login
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -796,6 +1339,19 @@ function App() {
     return <PublicVisitorRescheduleConfirmScreen token={confirmToken} onDone={() => { window.location.href = '/'; }} />;
   }
 
+  const hostToken = params.get('hostToken') || (params.get('token')?.startsWith('HTOKEN-') ? params.get('token') : null);
+  const hostAction = params.get('hostAction') || params.get('action');
+
+  if (hostToken) {
+    return (
+      <PublicHostApprovalScreen
+        token={hostToken}
+        initialAction={hostAction}
+        onDone={() => { window.location.href = '/'; }}
+      />
+    );
+  }
+
   if (initializing) {
     return (
       <div style={{
@@ -990,7 +1546,8 @@ function SmtpSettingsModal({ onClose }) {
 
 function Shell({ user, setUser, logout }) {
   const [tab, setTab] = useState('dashboard');
-  const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
+  const getISTTime = () => new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
+  const [currentTime, setCurrentTime] = useState(getISTTime);
   const [passData, setPassData] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -1007,7 +1564,7 @@ function Shell({ user, setUser, logout }) {
   const lastNotifCountRef = useRef(0);
 
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date().toLocaleTimeString()), 1000);
+    const timer = setInterval(() => setCurrentTime(getISTTime()), 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -1150,6 +1707,7 @@ function Shell({ user, setUser, logout }) {
           <div className="vams-toast-content">
             <strong>{toastAlert.title}</strong>
             <p>{toastAlert.message}</p>
+            <span style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px', display: 'block' }}>{formatNotifTime(toastAlert.created_at || new Date())}</span>
           </div>
         </div>
       )}
@@ -1249,7 +1807,7 @@ function Shell({ user, setUser, logout }) {
                           }}>
                             <span className="notif-title">{n.title}</span>
                             <span className="notif-msg">{n.message}</span>
-                            <span className="notif-time">{new Date(n.created_at).toLocaleTimeString()}</span>
+                            <span className="notif-time">{formatNotifTime(n.created_at)}</span>
                           </div>
                         ))
                       )}
@@ -2102,19 +2660,7 @@ function Register({ user, setTab, viewPass }) {
 }
 
 // ================= VISITOR DIRECTORY VIEW =================
-// Robustly format timestamps stored by SQLite (CURRENT_TIMESTAMP -> "YYYY-MM-DD HH:MM:SS", UTC)
-// or as ISO-8601 strings (e.g. valid_until). Returns "" for empty/invalid input.
-function fmtDateTime(val) {
-  if (!val) return '';
-  let s = String(val).trim();
-  // SQLite CURRENT_TIMESTAMP stores UTC without a timezone marker
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
-    s = s.replace(' ', 'T') + 'Z'; // interpret as UTC
-  }
-  const d = s === 'Z' ? null : new Date(s);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleString();
-}
+// Robustly formats timestamps stored by SQLite (CURRENT_TIMESTAMP -> "YYYY-MM-DD HH:MM:SS", UTC) using top-level fmtDateTime
 function Visitors({ user, viewPass }) {
   const [data, setData] = useState([]);
   const [q, setQ] = useState('');
@@ -3110,8 +3656,8 @@ function Reports() {
                         <td>{r.purpose}</td>
                         <td>{r.department || '-'}</td>
                         <td>{r.host_name || '-'}</td>
-                        <td>{r.entry_time || '-'}</td>
-                        <td>{r.exit_time || '-'}</td>
+                        <td>{fmtDateTime(r.entry_time) || '-'}</td>
+                        <td>{fmtDateTime(r.exit_time) || '-'}</td>
                         <td><StatusBadge status={r.status} /></td>
                       </tr>
                     ))
@@ -3165,7 +3711,7 @@ function Audit() {
               ) : (
                 logs.map((l, i) => (
                   <tr key={i}>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{l.created_at}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{fmtDateTime(l.created_at)}</td>
                     <td><b>{l.actor_name || 'System'}</b></td>
                     <td>
                       <span className="badge badge-inside">{l.action}</span>

@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import fs from 'fs';
 
 dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -63,6 +64,8 @@ try { db.exec("ALTER TABLE visits ADD COLUMN rejection_reason TEXT"); } catch(e)
 try { db.exec("ALTER TABLE visits ADD COLUMN created_by INTEGER"); } catch(e) {}
 try { db.exec("ALTER TABLE visits ADD COLUMN approved_by INTEGER"); } catch(e) {}
 try { db.exec("ALTER TABLE visits ADD COLUMN pass_token TEXT"); } catch(e) {}
+try { db.exec("ALTER TABLE visits ADD COLUMN host_token TEXT"); } catch(e) {}
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_visits_host_token ON visits(host_token)"); } catch(e) {}
 
 // Notification target_role Migration
 try { db.exec("ALTER TABLE notifications ADD COLUMN target_role TEXT"); } catch(e) {}
@@ -82,10 +85,14 @@ function setSetting(key, value) {
   db.prepare('INSERT INTO system_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
 }
 
-// Timezone helper: Default all email timestamps to Indian Standard Time (IST)
+// Timezone helper: Default all timestamps and email timestamps to Indian Standard Time (IST)
 function formatIST(dateInput) {
   if (!dateInput) return 'N/A';
-  const d = new Date(dateInput);
+  let s = String(dateInput).trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+    s = s.replace(' ', 'T') + 'Z';
+  }
+  const d = new Date(s);
   if (isNaN(d.getTime())) return String(dateInput);
   return d.toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -111,6 +118,9 @@ function buildEmailHtml({
   details = null,
   actionUrl = null,
   actionText = 'Open VAMS Portal',
+  actions = null,
+  secondaryUrl = null,
+  secondaryText = 'Log In to Host Dashboard',
   footerNote = null,
   logoTextSrc = 'cid:swagatham_logo_text',
   watermarkSrc = 'cid:swagatham_watermark'
@@ -128,11 +138,53 @@ function buildEmailHtml({
     </table>
   ` : '';
 
-  const actionBlock = actionUrl ? `
+  const actionBlock = (actions && actions.length) ? `
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 28px 0 16px 0;">
+      <tr>
+        <td align="center">
+          <table border="0" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+            <tr>
+              ${actions.map((act, idx) => {
+                const isDecline = act.type === 'decline' || (act.text && (act.text.includes('✕') || act.text.includes('✖') || act.text.toLowerCase().includes('deny') || act.text.toLowerCase().includes('decline')));
+                const bg = isDecline
+                  ? 'linear-gradient(135deg, #e11d48 0%, #be123c 100%)'
+                  : 'linear-gradient(135deg, #059669 0%, #0d9488 100%)';
+                const bgColor = isDecline ? '#e11d48' : '#059669';
+                const borderColor = isDecline ? '#fb7185' : '#34d399';
+                const shadow = isDecline ? 'rgba(225, 29, 72, 0.38)' : 'rgba(13, 148, 136, 0.38)';
+                const btnClass = isDecline ? 'action-btn-decline' : 'action-btn-approve';
+                const tooltip = act.title || (isDecline ? 'Decline or Propose New Time' : 'Approve Visitor');
+                const spacer = idx > 0 ? `
+                  <td width="32" style="width: 32px; min-width: 32px; max-width: 32px; font-size: 1px; line-height: 1;">&nbsp;</td>
+                ` : '';
+
+                return `
+                  ${spacer}
+                  <td align="center" style="border-radius: 9999px; background: ${bgColor}; padding: 0;">
+                    <a href="${act.url}" target="_blank" title="${tooltip}" class="${btnClass}" style="display: inline-block; padding: 12px 34px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 26px; font-weight: 900; line-height: 1; color: #ffffff !important; text-decoration: none; border-radius: 9999px; background: ${bg}; background-color: ${bgColor}; border: 1px solid ${borderColor}; box-shadow: 0 4px 16px ${shadow}; min-width: 80px; text-align: center; box-sizing: border-box;">
+                      ${act.text}
+                    </a>
+                  </td>
+                `;
+              }).join('')}
+            </tr>
+          </table>
+          <div style="text-align: center; margin-top: 14px; font-size: 11px; color: #64748b; letter-spacing: 0.3px;">
+            <span style="color: #059669; font-weight: 700;">✔ Approve</span> &nbsp;&bull;&nbsp; <span style="color: #e11d48; font-weight: 700;">✕ Decline / Reschedule</span>
+          </div>
+          ${secondaryUrl ? `
+            <div style="text-align: center; margin-top: 12px; font-size: 11px; color: #64748b;">
+              Or <a href="${secondaryUrl}" style="color: #6d4ee8; text-decoration: underline; font-weight: 600;">${secondaryText || 'Open Host Portal'}</a>
+            </div>
+          ` : ''}
+        </td>
+      </tr>
+    </table>
+  ` : (actionUrl ? `
     <div style="text-align: center; margin: 28px 0 16px 0;">
       <a href="${actionUrl}" style="background: linear-gradient(135deg, #6d4ee8 0%, #4c1d95 100%); color: #ffffff !important; padding: 13px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block; box-shadow: 0 4px 14px rgba(109, 78, 232, 0.35); text-transform: uppercase; letter-spacing: 0.5px;">${actionText}</a>
     </div>
-  ` : '';
+  ` : '');
 
   return `<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -236,6 +288,36 @@ function buildEmailHtml({
 </html>`;
 }
 
+// Base Application URL Resolver (Local Dev vs VPS Production)
+function getAppBaseUrl(req) {
+  if (process.env.APP_URL) {
+    return process.env.APP_URL.replace(/\/$/, '');
+  }
+  const settingUrl = getSetting('app_url');
+  if (settingUrl) {
+    return settingUrl.replace(/\/$/, '');
+  }
+  if (req) {
+    if (req.headers && req.headers.origin) {
+      return req.headers.origin.replace(/\/$/, '');
+    }
+    if (req.headers && req.headers.referer) {
+      try {
+        const u = new URL(req.headers.referer);
+        return `${u.protocol}//${u.host}`;
+      } catch (e) {}
+    }
+    if (req.headers && req.headers.host) {
+      const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+      return `${proto}://${req.headers.host}`;
+    }
+  }
+  return 'https://vams.spandanatech.in';
+}
+
+// In-Memory Tracker for Last Sent Email (for local browser preview & testing)
+let lastSentEmail = null;
+
 // SMTP Config & Email Dispatcher with Auto CID Attachments
 function getSmtpConfig() {
   return {
@@ -248,15 +330,87 @@ function getSmtpConfig() {
   };
 }
 
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, meta = null }) {
   if (!to || !to.includes('@')) {
     console.log(`[VAMS EMAIL SKIPPED] No valid email provided: "${to}"`);
     return { success: false, reason: 'Invalid or missing recipient email' };
   }
+
+  // Cache last email and write static preview file to frontend public directory
+  lastSentEmail = { to, subject, html, text, meta, timestamp: new Date().toISOString() };
+  try {
+    const previewFile = path.join(__dirname, '../../frontend/public/preview_last_email.html');
+    if (html) {
+      let browserHtml = html
+        .replace(/cid:swagatham_logo_text/g, '/email_logo_text.png')
+        .replace(/cid:swagatham_watermark/g, '/email_watermark.png');
+
+      // Inject interactive 1-click script for in-browser email preview testing
+      const interactiveScript = `
+        <script>
+        (function() {
+          document.addEventListener('DOMContentLoaded', function() {
+            const approveBtn = document.querySelector('.action-btn-approve');
+            const declineBtn = document.querySelector('.action-btn-decline');
+            if (approveBtn) {
+              approveBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                const url = this.getAttribute('href');
+                this.style.pointerEvents = 'none';
+                this.style.opacity = '0.7';
+                this.innerHTML = '⌛';
+                fetch(url)
+                  .then(function() {
+                    approveBtn.outerHTML = '<span style="display:inline-block;padding:12px 30px;border-radius:9999px;background:#ecfdf5;color:#059669;font-weight:800;font-size:14px;border:1px solid #34d399;box-shadow:0 2px 8px rgba(5,150,105,0.2);">✔ APPROVED</span>';
+                    if (declineBtn) {
+                      declineBtn.style.opacity = '0.25';
+                      declineBtn.style.pointerEvents = 'none';
+                      declineBtn.style.cursor = 'not-allowed';
+                    }
+                    const note = document.createElement('div');
+                    note.style.cssText = 'text-align:center;color:#059669;font-size:12px;font-weight:700;margin-top:10px;';
+                    note.innerText = '✔ Pass Approved! Security desk updated in real-time.';
+                    const wrap = document.querySelector('span[style*="APPROVED"]');
+                    if (wrap && wrap.closest('table')) {
+                      wrap.closest('table').parentNode.appendChild(note);
+                    }
+                  })
+                  .catch(function(err) {
+                    approveBtn.style.pointerEvents = 'auto';
+                    approveBtn.style.opacity = '1';
+                    approveBtn.innerHTML = '✔';
+                    alert('Approval error: ' + err.message);
+                  });
+              });
+            }
+          });
+        })();
+        </script>
+      `;
+      if (browserHtml.includes('</body>')) {
+        browserHtml = browserHtml.replace('</body>', interactiveScript + '</body>');
+      } else {
+        browserHtml += interactiveScript;
+      }
+      fs.writeFileSync(previewFile, browserHtml, 'utf8');
+    }
+  } catch (err) {
+    console.error('[PREVIEW SAVE ERROR]', err.message);
+  }
+
   const config = getSmtpConfig();
   if (!config.user || !config.pass) {
-    console.log(`[VAMS EMAIL SIMULATION]\nRecipient: ${to}\nSubject: ${subject}\nSnippet: ${(text || html || '').slice(0, 120)}...`);
-    return { success: true, simulated: true };
+    console.log(`\n======================================================================`);
+    console.log(`📧 [VAMS EMAIL SIMULATION - 1-TAP ACTION BUTTONS GENERATED]`);
+    console.log(`Recipient : ${to}`);
+    console.log(`Subject   : ${subject}`);
+    if (meta && meta.approveUrl && meta.declineUrl) {
+      console.log(`\n🟢 DIRECT APPROVE LINK:\n   ${meta.approveUrl}`);
+      console.log(`\n🔴 DIRECT DECLINE LINK:\n   ${meta.declineUrl}`);
+      console.log(`\n🌐 LIVE HTML PREVIEW:\n   http://localhost:5180/preview_last_email.html`);
+    }
+    console.log(`======================================================================\n`);
+    return { success: true, simulated: true, approveUrl: meta?.approveUrl, declineUrl: meta?.declineUrl };
   }
   try {
     const transporter = nodemailer.createTransport({
@@ -288,18 +442,22 @@ async function sendEmail({ to, subject, html, text }) {
       attachments
     });
     console.log(`[VAMS EMAIL SENT] ID: ${info.messageId} -> ${to}`);
-    return { success: true, messageId: info.messageId };
+    if (meta && meta.approveUrl) {
+      console.log(`[HOST ACTION URLS] Approve: ${meta.approveUrl} | Decline: ${meta.declineUrl}`);
+    }
+    return { success: true, messageId: info.messageId, approveUrl: meta?.approveUrl, declineUrl: meta?.declineUrl };
   } catch (err) {
     console.error(`[VAMS EMAIL ERROR] Failed sending to ${to}:`, err.message);
     return { success: false, error: err.message };
   }
 }
 
-// In-App Notification Helper
+// In-App Notification Helper (stores ISO 8601 UTC timestamp)
 function createNotification({ user_id = null, target_role = null, type, title, message, link_id = null }) {
   try {
-    db.prepare('INSERT INTO notifications(user_id,target_role,type,title,message,link_id) VALUES(?,?,?,?,?,?)').run(
-      user_id, target_role, type, title, message, link_id
+    const createdAt = new Date().toISOString();
+    db.prepare('INSERT INTO notifications(user_id,target_role,type,title,message,link_id,created_at) VALUES(?,?,?,?,?,?,?)').run(
+      user_id, target_role, type, title, message, link_id, createdAt
     );
   } catch (err) {
     console.error('[VAMS NOTIFICATION ERROR]', err.message);
@@ -664,7 +822,21 @@ app.get('/api/notifications', auth, (req, res) => {
     unreadCount = db.prepare('SELECT COUNT(*) c FROM notifications WHERE user_id = ? AND read=0').get(id).c;
   }
 
-  res.json({ notifications: rows, unreadCount });
+  // Ensure created_at conforms strictly to ISO 8601 standard for all rows (both new and legacy SQLite CURRENT_TIMESTAMP records)
+  const normalizedRows = rows.map(r => {
+    let cat = r.created_at;
+    if (cat) {
+      let s = String(cat).trim();
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+        s = s.replace(' ', 'T') + 'Z';
+      }
+      const d = new Date(s);
+      cat = isNaN(d.getTime()) ? cat : d.toISOString();
+    }
+    return { ...r, created_at: cat };
+  });
+
+  res.json({ notifications: normalizedRows, unreadCount });
 });
 
 app.put('/api/notifications/:id/read', auth, (req, res) => {
@@ -967,7 +1139,7 @@ app.get('/api/dashboard', auth, (req, res) => res.json(dashboard(req.user)));
 
 // Scoped Visitor Listing
 app.get('/api/visitors', auth, (req, res) => {
-  let sql = `SELECT v.*,x.id visit_id,x.visitor_code,x.entry_time,x.exit_time,x.status,x.valid_until,x.expected_checkin,x.expected_checkout,x.initiator_type,x.expected_arrival_time,x.proposed_arrival_time,x.rejection_reason,x.pass_token,u.name host_name,u.email host_email FROM visitors v JOIN visits x ON x.visitor_id=v.id LEFT JOIN users u ON u.id=v.host_id WHERE 1=1`;
+  let sql = `SELECT v.*,x.id visit_id,x.visitor_code,x.entry_time,x.exit_time,x.status,x.valid_until,x.expected_checkin,x.expected_checkout,x.initiator_type,x.expected_arrival_time,x.proposed_arrival_time,x.rejection_reason,x.pass_token,x.host_token,u.name host_name,u.email host_email FROM visitors v JOIN visits x ON x.visitor_id=v.id LEFT JOIN users u ON u.id=v.host_id WHERE 1=1`;
   const p = [];
 
   // Scoping for standard HOST users
@@ -997,6 +1169,7 @@ app.post('/api/visitors/register', auth, async (req, res) => {
   const cleanMobile = String(mobile).trim();
   const code = 'VAMS-' + Date.now().toString(36).toUpperCase();
   const passToken = 'TOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+  const hostToken = 'HTOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase() + crypto.randomBytes(4).toString('hex').toUpperCase();
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const validUntil = expected_checkout || new Date(Date.now() + 8 * 3600000).toISOString();
 
@@ -1007,12 +1180,12 @@ app.post('/api/visitors/register', auth, async (req, res) => {
   const tx = db.transaction(() => {
     const r = db.prepare('INSERT INTO visitors(name,mobile,email,company,purpose,host_id,department,vehicle,photo,consent,otp) VALUES(?,?,?,?,?,?,?,?,?,1,?)')
       .run(name, cleanMobile, email || '', company || '', purpose || 'Visit', host_id, department || '', vehicle || '', photo || null, otp);
-    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,expected_arrival_time,created_by,approved_by,pass_token) VALUES(?,?,?,?,?,?,?,?,?,?)')
-      .run(r.lastInsertRowid, code, status, validUntil, expected_checkin || null, expected_checkout || null, expected_checkin || null, req.user.id, status === 'APPROVED' ? req.user.id : null, passToken);
+    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,expected_arrival_time,created_by,approved_by,pass_token,host_token) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+      .run(r.lastInsertRowid, code, status, validUntil, expected_checkin || null, expected_checkout || null, expected_checkin || null, req.user.id, status === 'APPROVED' ? req.user.id : null, passToken, hostToken);
     db.prepare('INSERT INTO approvals(visit_id,host_id,status) VALUES(?,?,?)').run(vr.lastInsertRowid, host_id, status === 'APPROVED' ? 'APPROVED' : 'PENDING');
     logPassStateChange(vr.lastInsertRowid, null, status, req.user.id, req.user.role, 'Registered (Awaiting Host Approval)');
     audit(req.user.id, 'REGISTER_VISITOR', 'VISIT', vr.lastInsertRowid, code);
-    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, otp, passToken, status };
+    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, otp, passToken, hostToken, status };
   });
 
   const out = tx();
@@ -1026,28 +1199,37 @@ app.post('/api/visitors/register', auth, async (req, res) => {
     link_id: out.visitId
   });
 
-  // Host Email Notification
+  // Host Email Notification with Direct Action Buttons
   const hostUser = db.prepare('SELECT * FROM users WHERE id=?').get(host_id);
-  if (hostUser && hostUser.email) {
+  if (hostUser && hostUser.email && status !== 'APPROVED') {
+    const baseUrl = getAppBaseUrl(req);
+    const approveUrl = `${baseUrl}/api/public/quick-host-action?token=${hostToken}&action=APPROVE`;
+    const declineUrl = `${baseUrl}/?hostToken=${hostToken}&action=DECLINE`;
+
     sendEmail({
       to: hostUser.email,
-      subject: `[Swagatham VMS] New Visitor Request: ${name} is visiting you`,
+      subject: `[Swagatham VMS] Visitor Approval Request: ${name} is visiting you`,
+      meta: { approveUrl, declineUrl, hostToken, visitId: out.visitId },
       html: buildEmailHtml({
-        badgeText: 'ACTION REQUIRED',
+        badgeText: 'APPROVAL REQUIRED',
         badgeBg: '#eff6ff',
         badgeColor: '#1d4ed8',
         title: 'New Visitor Approval Request',
         greeting: `Hello <strong>${hostUser.name}</strong>,`,
-        messageHtml: `<p>A visitor has been registered to meet you at reception/gate:</p>`,
+        messageHtml: `<p>A visitor has arrived / registered to meet you at reception. Please choose an authorization action directly below:</p>`,
         details: [
-          { label: 'Visitor Name', value: name },
+          { label: 'Visitor Name', value: name, highlight: true },
           { label: 'Company', value: company || 'N/A' },
           { label: 'Purpose', value: purpose || 'Visit' },
-          { label: 'Registered At (IST)', value: formatIST(new Date()) }
+          { label: 'Registered At (IST)', value: formatIST(new Date()), highlight: true }
         ],
-        actionUrl: 'https://vams.spandanatech.in',
-        actionText: 'Open Host Dashboard to Review',
-        footerNote: 'Please log in to your Swagatham VMS Dashboard to review and single-tap approve or reject this visitor pass.'
+        actions: [
+          { text: '✔', url: approveUrl, bg: '#059669', type: 'approve', title: 'Approve Visitor' },
+          { text: '✕', url: declineUrl, bg: '#e11d48', type: 'decline', title: 'Decline or Propose New Time' }
+        ],
+        secondaryUrl: baseUrl,
+        secondaryText: 'Open Host Portal',
+        footerNote: '⚡ Click ✔ to Approve immediately, or ✕ to Decline / Propose a new time.'
       })
     }).catch(err => console.error('[VAMS EMAIL ERROR]', err));
   }
@@ -1106,15 +1288,16 @@ app.post('/api/public/register-visit', async (req, res) => {
   const cleanMobile = String(mobile).trim();
   const code = 'VAMS-' + Date.now().toString(36).toUpperCase();
   const passToken = 'TOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+  const hostToken = 'HTOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase() + crypto.randomBytes(4).toString('hex').toUpperCase();
   const validUntil = new Date(new Date(expected_arrival_time).getTime() + 8 * 3600000).toISOString();
 
   const tx = db.transaction(() => {
     const r = db.prepare('INSERT INTO visitors(name,mobile,email,company,purpose,host_id,department,vehicle,consent) VALUES(?,?,?,?,?,?,?,?,1)').run(name, cleanMobile, email || '', company || '', purpose, host_id, department || '', vehicle || '');
-    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,initiator_type,expected_arrival_time,pass_token) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(r.lastInsertRowid, code, 'PENDING_HOST_REVIEW', validUntil, expected_arrival_time, validUntil, 'SELF_REGISTERED', expected_arrival_time, passToken);
+    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,initiator_type,expected_arrival_time,pass_token,host_token) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(r.lastInsertRowid, code, 'PENDING_HOST_REVIEW', validUntil, expected_arrival_time, validUntil, 'SELF_REGISTERED', expected_arrival_time, passToken, hostToken);
     db.prepare('INSERT INTO approvals(visit_id,host_id,status) VALUES(?,?,?)').run(vr.lastInsertRowid, host_id, 'PENDING');
     logPassStateChange(vr.lastInsertRowid, null, 'PENDING_HOST_REVIEW', null, 'VISITOR', 'Self-registered by visitor');
-    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, passToken };
+    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, passToken, hostToken };
   });
 
   const out = tx();
@@ -1125,31 +1308,40 @@ app.post('/api/public/register-visit', async (req, res) => {
     user_id: host_id,
     type: 'VISITOR_REGISTERED',
     title: '🔔 New Visitor Self-Registered',
-    message: `${name} (${company || 'Individual'}) requested a visit for ${new Date(expected_arrival_time).toLocaleString()}.`,
+    message: `${name} (${company || 'Individual'}) requested a visit for ${formatIST(expected_arrival_time)}.`,
     link_id: out.visitId
   });
 
-  // Host Email Notification
+  // Host Email Notification with Direct Action Buttons
   if (hostUser && hostUser.email) {
+    const baseUrl = getAppBaseUrl(req);
+    const approveUrl = `${baseUrl}/api/public/quick-host-action?token=${hostToken}&action=APPROVE`;
+    const declineUrl = `${baseUrl}/?hostToken=${hostToken}&action=DECLINE`;
+
     sendEmail({
       to: hostUser.email,
       subject: `[Swagatham VMS] Pre-Approval Request: ${name} is visiting you`,
+      meta: { approveUrl, declineUrl, hostToken, visitId: out.visitId },
       html: buildEmailHtml({
         badgeText: 'PRE-APPROVAL REQUEST',
         badgeBg: '#fef3c7',
         badgeColor: '#92400e',
         title: 'Visitor Pre-Approval Request',
         greeting: `Hello <strong>${hostUser.name}</strong>,`,
-        messageHtml: `<p>A visitor has self-registered to meet you:</p>`,
+        messageHtml: `<p>A visitor has self-registered to meet you. Please authorize or deny entry directly below:</p>`,
         details: [
-          { label: 'Visitor Name', value: name },
+          { label: 'Visitor Name', value: name, highlight: true },
           { label: 'Company', value: company || 'N/A' },
           { label: 'Purpose', value: purpose },
           { label: 'Expected Arrival (IST)', value: formatIST(expected_arrival_time), highlight: true }
         ],
-        actionUrl: 'https://vams.spandanatech.in',
-        actionText: 'Review & Respond in Host Dashboard',
-        footerNote: 'Please log in to your Swagatham VMS Host Dashboard to Single-Tap Approve, Propose New Time, or Reject this visit.'
+        actions: [
+          { text: '✔', url: approveUrl, bg: '#059669', type: 'approve', title: 'Approve Visitor' },
+          { text: '✕', url: declineUrl, bg: '#e11d48', type: 'decline', title: 'Decline or Propose New Time' }
+        ],
+        secondaryUrl: baseUrl,
+        secondaryText: 'Open Host Portal',
+        footerNote: '⚡ Click ✔ to Approve immediately, or ✕ to Decline / Propose a new time.'
       })
     });
   }
@@ -1167,6 +1359,7 @@ app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTIO
   const cleanMobile = String(mobile).trim();
   const code = 'VAMS-' + Date.now().toString(36).toUpperCase();
   const passToken = 'TOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+  const hostToken = 'HTOKEN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase() + crypto.randomBytes(4).toString('hex').toUpperCase();
   const validUntil = new Date(new Date(expected_arrival_time).getTime() + 8 * 3600000).toISOString();
 
   // If host themselves created the pass, it's auto approved!
@@ -1175,12 +1368,12 @@ app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTIO
 
   const tx = db.transaction(() => {
     const r = db.prepare('INSERT INTO visitors(name,mobile,email,company,purpose,host_id,department,vehicle,consent) VALUES(?,?,?,?,?,?,?,?,1)').run(name, cleanMobile, email || '', company || '', purpose, host_id, department || '', vehicle || '');
-    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,initiator_type,expected_arrival_time,created_by,approved_by,pass_token) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-      .run(r.lastInsertRowid, code, initialStatus, validUntil, expected_arrival_time, validUntil, 'STAFF_CREATED', expected_arrival_time, req.user.id, isCreatedBySelf ? req.user.id : null, passToken);
+    const vr = db.prepare('INSERT INTO visits(visitor_id,visitor_code,status,valid_until,expected_checkin,expected_checkout,initiator_type,expected_arrival_time,created_by,approved_by,pass_token,host_token) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(r.lastInsertRowid, code, initialStatus, validUntil, expected_arrival_time, validUntil, 'STAFF_CREATED', expected_arrival_time, req.user.id, isCreatedBySelf ? req.user.id : null, passToken, hostToken);
     db.prepare('INSERT INTO approvals(visit_id,host_id,status) VALUES(?,?,?)').run(vr.lastInsertRowid, host_id, isCreatedBySelf ? 'APPROVED' : 'PENDING');
     logPassStateChange(vr.lastInsertRowid, null, initialStatus, req.user.id, req.user.role, isCreatedBySelf ? 'Host pre-approved guest pass' : `Guest pass created by ${req.user.name} (${req.user.role})`);
     audit(req.user.id, 'PRE_CREATE_PASS', 'VISIT', vr.lastInsertRowid, code);
-    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, passToken, status: initialStatus };
+    return { id: r.lastInsertRowid, visitId: vr.lastInsertRowid, visitorCode: code, passToken, hostToken, status: initialStatus };
   });
 
   const out = tx();
@@ -1192,9 +1385,42 @@ app.post('/api/passes/pre-create', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTIO
       user_id: host_id,
       type: 'STAFF_PASS_CREATED',
       title: '🎟️ Guest Pass Created on Your Behalf',
-      message: `${req.user.name} created a pass for ${name} visiting you at ${new Date(expected_arrival_time).toLocaleString()}.`,
+      message: `${req.user.name} created a pass for ${name} visiting you at ${formatIST(expected_arrival_time)}.`,
       link_id: out.visitId
     });
+
+    if (hostUser && hostUser.email) {
+      const baseUrl = getAppBaseUrl(req);
+      const approveUrl = `${baseUrl}/api/public/quick-host-action?token=${hostToken}&action=APPROVE`;
+      const declineUrl = `${baseUrl}/?hostToken=${hostToken}&action=DECLINE`;
+
+      sendEmail({
+        to: hostUser.email,
+        subject: `[Swagatham VMS] Guest Pass Confirmation: ${name} is visiting you`,
+        meta: { approveUrl, declineUrl, hostToken, visitId: out.visitId },
+        html: buildEmailHtml({
+          badgeText: 'CONFIRMATION REQUIRED',
+          badgeBg: '#fef3c7',
+          badgeColor: '#92400e',
+          title: 'Guest Pass Created on Your Behalf',
+          greeting: `Hello <strong>${hostUser.name}</strong>,`,
+          messageHtml: `<p>A visitor pass was scheduled on your behalf. Please authorize or deny entry below:</p>`,
+          details: [
+            { label: 'Visitor Name', value: name, highlight: true },
+            { label: 'Company', value: company || 'N/A' },
+            { label: 'Purpose', value: purpose },
+            { label: 'Expected Arrival (IST)', value: formatIST(expected_arrival_time), highlight: true }
+          ],
+          actions: [
+            { text: '✔', url: approveUrl, bg: '#059669', type: 'approve', title: 'Approve Visitor' },
+            { text: '✕', url: declineUrl, bg: '#e11d48', type: 'decline', title: 'Decline or Propose New Time' }
+          ],
+          secondaryUrl: baseUrl,
+          secondaryText: 'Open Host Portal',
+          footerNote: '⚡ Click ✔ to Approve immediately, or ✕ to Decline / Propose a new time.'
+        })
+      });
+    }
   }
 
   res.status(201).json({ message: isCreatedBySelf ? 'Guest pass pre-approved!' : 'Guest pass created. Awaiting host confirmation.', ...out });
@@ -1370,7 +1596,7 @@ app.post('/api/public/pass-confirm/:passToken', (req, res) => {
       user_id: visit.host_id,
       type: 'RESCHEDULE_ACCEPTED',
       title: '🎉 Reschedule Accepted by Visitor',
-      message: `Visitor accepted proposed arrival time (${new Date(visit.proposed_arrival_time).toLocaleString()}). Pass is now APPROVED.`,
+      message: `Visitor accepted proposed arrival time (${formatIST(visit.proposed_arrival_time)}). Pass is now APPROVED.`,
       link_id: visit.id
     });
     return res.json({ message: 'Rescheduled time accepted. Pass approved!' });
@@ -1391,13 +1617,686 @@ app.post('/api/public/pass-confirm/:passToken', (req, res) => {
   }
 });
 
+// Host Zero-Login Direct Approval API (Public)
+app.get('/api/public/host-approval/:token', (req, res) => {
+  const visit = db.prepare(`
+    SELECT x.id visit_id, x.visitor_code, x.status, x.valid_until, x.expected_arrival_time, x.proposed_arrival_time, x.expected_checkin,
+           x.expected_checkout, x.rejection_reason, x.created_at visit_created_at, x.host_token,
+           v.name visitor_name, v.mobile visitor_mobile, v.email visitor_email, v.company, v.purpose,
+           v.department visitor_department, v.vehicle, v.photo,
+           u.id host_id, u.name host_name, u.email host_email, u.department host_department, u.phone host_phone
+    FROM visits x
+    JOIN visitors v ON v.id = x.visitor_id
+    LEFT JOIN users u ON u.id = v.host_id
+    WHERE x.host_token = ?
+  `).get(req.params.token);
+
+  if (!visit) {
+    return res.status(404).json({ message: 'Invalid or expired approval link.' });
+  }
+
+  const approval = db.prepare('SELECT * FROM approvals WHERE visit_id=? ORDER BY id DESC LIMIT 1').get(visit.visit_id);
+
+  res.json({
+    ...visit,
+    approval_status: approval ? approval.status : visit.status,
+    approval_notes: approval ? approval.notes : null,
+    approval_action_time: approval ? approval.action_time : null
+  });
+});
+
+app.post('/api/public/host-approval/:token', async (req, res) => {
+  const visit = db.prepare(`
+    SELECT x.id visit_id, x.visitor_code, x.status, x.expected_arrival_time, x.expected_checkin,
+           x.host_token, x.pass_token,
+           v.name visitor_name, v.mobile visitor_mobile, v.email visitor_email, v.company, v.purpose, v.host_id,
+           u.id host_user_id, u.name host_name, u.email host_email
+    FROM visits x
+    JOIN visitors v ON v.id = x.visitor_id
+    LEFT JOIN users u ON u.id = v.host_id
+    WHERE x.host_token = ?
+  `).get(req.params.token);
+
+  if (!visit) {
+    return res.status(404).json({ message: 'Invalid or expired approval link.' });
+  }
+
+  // Idempotency: check if already approved or rejected
+  if (visit.status === 'APPROVED') {
+    return res.status(400).json({
+      message: 'This visit request has already been APPROVED.',
+      status: 'APPROVED',
+      visitor_name: visit.visitor_name,
+      visitor_code: visit.visitor_code
+    });
+  }
+  if (visit.status === 'REJECTED') {
+    return res.status(400).json({
+      message: 'This visit request has already been DECLINED.',
+      status: 'REJECTED',
+      visitor_name: visit.visitor_name
+    });
+  }
+
+  const { action, notes, proposed_time } = req.body;
+  if (!action || !['APPROVE', 'DECLINE', 'REJECT', 'PROPOSE_TIME'].includes(action)) {
+    return res.status(400).json({ message: 'Valid action (APPROVE, DECLINE, or PROPOSE_TIME) is required.' });
+  }
+
+  const hostActorId = visit.host_id || visit.host_user_id || null;
+  const hostName = visit.host_name || 'Host';
+
+  if (action === 'APPROVE') {
+    const newStatus = 'APPROVED';
+    const noteText = (notes && notes.trim()) ? notes.trim() : 'Approved directly via email';
+
+    db.prepare('UPDATE visits SET status=?, approved_by=? WHERE id=?').run(newStatus, hostActorId, visit.visit_id);
+    db.prepare("UPDATE approvals SET status='APPROVED', action_time=CURRENT_TIMESTAMP, notes=? WHERE visit_id=?").run(noteText, visit.visit_id);
+    logPassStateChange(visit.visit_id, visit.status, newStatus, hostActorId, 'HOST', noteText);
+    audit(hostActorId || 0, 'EMAIL_APPROVE_VISIT', 'VISIT', visit.visit_id, `Approved by ${hostName} via email 1-tap`);
+
+    // In-app alert to Guard & Receptionist
+    createNotification({
+      target_role: 'GUARD_RECEPTION',
+      type: 'VISIT_APPROVED',
+      title: '✅ Visitor Pass Approved',
+      message: `${visit.visitor_name} has been approved by host ${hostName}.`,
+      link_id: visit.visit_id
+    });
+
+    // Notify Visitor via email
+    if (visit.visitor_email) {
+      sendEmail({
+        to: visit.visitor_email,
+        subject: `[Swagatham VMS] Your Visitor Pass is Approved! Code: ${visit.visitor_code}`,
+        html: buildEmailHtml({
+          badgeText: 'PASS APPROVED',
+          badgeBg: '#ecfdf5',
+          badgeColor: '#047857',
+          title: 'Your Visitor Pass is Approved! 🎉',
+          greeting: `Dear <strong>${visit.visitor_name}</strong>,`,
+          messageHtml: `<p>Your host <strong>${hostName}</strong> has approved your visit request.</p>`,
+          details: [
+            { label: 'Visitor Pass Code', value: visit.visitor_code, highlight: true },
+            { label: 'Host Name', value: hostName },
+            { label: 'Expected Arrival (IST)', value: formatIST(visit.expected_arrival_time || visit.expected_checkin || new Date()), highlight: true }
+          ],
+          footerNote: 'Please present this Visitor Pass Code at reception upon arrival.'
+        })
+      }).catch(e => console.error('[VISITOR NOTIFY EMAIL ERROR]', e));
+    }
+
+    return res.json({
+      success: true,
+      status: 'APPROVED',
+      message: `Visit for ${visit.visitor_name} has been approved successfully!`,
+      visitor_name: visit.visitor_name,
+      visitor_code: visit.visitor_code
+    });
+  } else if (action === 'PROPOSE_TIME') {
+    if (!proposed_time) return res.status(400).json({ message: 'Proposed arrival time is required' });
+    const newStatus = 'PENDING_VISITOR_CONFIRMATION';
+    const noteText = (notes && notes.trim()) ? notes.trim() : `Counter time proposed: ${proposed_time}`;
+
+    db.prepare('UPDATE visits SET status=?, proposed_arrival_time=? WHERE id=?').run(newStatus, proposed_time, visit.visit_id);
+    db.prepare("UPDATE approvals SET status='PENDING', action_time=CURRENT_TIMESTAMP, notes=? WHERE visit_id=?").run(noteText, visit.visit_id);
+    logPassStateChange(visit.visit_id, visit.status, newStatus, hostActorId, 'HOST', `Proposed counter time: ${proposed_time}`);
+    audit(hostActorId || 0, 'EMAIL_PROPOSE_TIME', 'VISIT', visit.visit_id, proposed_time);
+
+    // In-app alert to Guard & Receptionist
+    createNotification({
+      target_role: 'GUARD_RECEPTION',
+      type: 'VISIT_RESCHEDULE_PROPOSED',
+      title: '📅 Visit Reschedule Proposed by Host',
+      message: `${visit.visitor_name}'s host proposed a new arrival time (${formatIST(proposed_time)}).`,
+      link_id: visit.visit_id
+    });
+
+    // Notify Visitor via email
+    if (visit.visitor_email) {
+      const baseUrl = getAppBaseUrl(req);
+      const confirmUrl = `${baseUrl}/?confirmToken=${visit.pass_token}`;
+      sendEmail({
+        to: visit.visitor_email,
+        subject: `[Swagatham VMS] Host Proposed New Arrival Time: ${visit.visitor_name}`,
+        html: buildEmailHtml({
+          badgeText: 'RESCHEDULE PROPOSED',
+          badgeBg: '#fffbeb',
+          badgeColor: '#b45309',
+          title: 'Host Proposed a New Meeting Time',
+          greeting: `Dear <strong>${visit.visitor_name}</strong>,`,
+          messageHtml: `<p>Your host <strong>${hostName}</strong> is not available at the requested time and has proposed a new arrival time:</p>`,
+          details: [
+            { label: 'Host Name', value: hostName },
+            { label: 'New Proposed Arrival (IST)', value: formatIST(proposed_time), highlight: true }
+          ],
+          actionUrl: confirmUrl,
+          actionText: 'Review & Confirm Reschedule',
+          footerNote: 'Please click the link above to accept or decline this new proposed time.'
+        })
+      }).catch(e => console.error('[VISITOR NOTIFY EMAIL ERROR]', e));
+    }
+
+    return res.json({
+      success: true,
+      status: 'PENDING_VISITOR_CONFIRMATION',
+      message: `Counter time proposal of ${formatIST(proposed_time)} sent to visitor.`,
+      visitor_name: visit.visitor_name,
+      proposed_time
+    });
+  } else {
+    // DECLINE
+    const newStatus = 'REJECTED';
+    const reason = (notes && notes.trim()) ? notes.trim() : 'Declined by host via email';
+
+    db.prepare('UPDATE visits SET status=?, rejection_reason=?, approved_by=? WHERE id=?').run(newStatus, reason, hostActorId, visit.visit_id);
+    db.prepare("UPDATE approvals SET status='REJECTED', action_time=CURRENT_TIMESTAMP, notes=? WHERE visit_id=?").run(reason, visit.visit_id);
+    logPassStateChange(visit.visit_id, visit.status, newStatus, hostActorId, 'HOST', reason);
+    audit(hostActorId || 0, 'EMAIL_REJECT_VISIT', 'VISIT', visit.visit_id, `Declined by ${hostName} via email: ${reason}`);
+
+    // In-app alert to Guard & Receptionist
+    createNotification({
+      target_role: 'GUARD_RECEPTION',
+      type: 'VISIT_REJECTED',
+      title: '❌ Visit Request Rejected',
+      message: `${visit.visitor_name} was declined by host ${hostName}. Reason: ${reason}`,
+      link_id: visit.visit_id
+    });
+
+    // Notify Visitor via email
+    if (visit.visitor_email) {
+      sendEmail({
+        to: visit.visitor_email,
+        subject: `[Swagatham VMS] Visitor Request Update: ${visit.visitor_name}`,
+        html: buildEmailHtml({
+          badgeText: 'REQUEST DECLINED',
+          badgeBg: '#fef2f2',
+          badgeColor: '#b91c1c',
+          title: 'Visit Request Not Approved',
+          greeting: `Dear <strong>${visit.visitor_name}</strong>,`,
+          messageHtml: `<p>Your host <strong>${hostName}</strong> is unable to host this visit at the requested time.</p>`,
+          details: [
+            { label: 'Host Name', value: hostName },
+            { label: 'Reason Provided', value: reason }
+          ],
+          footerNote: 'For inquiries or to reschedule, please contact your host or reception.'
+        })
+      }).catch(e => console.error('[VISITOR NOTIFY EMAIL ERROR]', e));
+    }
+
+    return res.json({
+      success: true,
+      status: 'REJECTED',
+      message: `Visit request for ${visit.visitor_name} has been declined.`,
+      visitor_name: visit.visitor_name
+    });
+  }
+});
+
+// Latest Generated Email Browser Endpoint (for local testing)
+app.get('/api/public/email-preview/latest', (req, res) => {
+  if (!lastSentEmail) {
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Swagatham VMS - Email Preview</title>
+        <style>body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 40px; text-align: center; color: #475569; background: #f8fafc; }</style>
+      </head>
+      <body>
+        <div style="max-width: 500px; margin: 40px auto; background: white; padding: 32px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.06);">
+          <h2 style="color: #0f172a; margin-top: 0;">No Email Dispatched Yet</h2>
+          <p>Register a visitor or pre-create a pass in the Swagatham application to trigger a host approval email.</p>
+          <div style="margin-top: 24px;">
+            <a href="/api/public/email-preview?type=host-approval" style="display: inline-block; background: #6d4ee8; color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: 600;">View Sample Host Approval Email</a>
+          </div>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+  const browserHtml = (lastSentEmail.html || '')
+    .replace(/cid:swagatham_logo_text/g, '/email_logo_text.png')
+    .replace(/cid:swagatham_watermark/g, '/email_watermark.png');
+  res.setHeader('Content-Type', 'text/html');
+  res.send(browserHtml);
+});
+
+// Futuristic Immediate Access Authorization Confirmation Renderer
+function renderActionPage({
+  status = 'APPROVED',
+  title = 'Access Authorization',
+  badgeText = '⚡ AUTHORIZED',
+  visitorName = 'Visitor',
+  visitorCode = null,
+  company = 'N/A',
+  purpose = 'Visit',
+  hostName = 'Host',
+  message = '',
+  portalUrl = '/'
+}) {
+  const isApproved = status === 'APPROVED' || status === 'ALREADY_APPROVED';
+  const isRejected = status === 'REJECTED' || status === 'ALREADY_REJECTED';
+  const isError = status === 'ERROR';
+
+  const themeColor = isApproved ? '#10b981' : (isRejected ? '#f43f5e' : '#64748b');
+  const glowColor = isApproved ? 'rgba(16, 185, 129, 0.25)' : (isRejected ? 'rgba(244, 63, 94, 0.25)' : 'rgba(100, 116, 139, 0.2)');
+  const icon = isApproved ? '⚡' : (isRejected ? '✕' : '⚠️');
+  const actionTitle = isApproved ? 'ACCESS GRANTED' : (isRejected ? 'ACCESS DENIED' : title);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swagatham VMS - ${actionTitle}</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #090d16;
+    background-image: 
+      radial-gradient(circle at 50% 12%, ${glowColor} 0%, transparent 60%),
+      radial-gradient(circle at 20% 80%, rgba(109, 78, 232, 0.12) 0%, transparent 50%);
+    font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+    color: #f1f5f9;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  .card {
+    width: 100%;
+    max-width: 480px;
+    background: rgba(15, 23, 42, 0.82);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 24px;
+    padding: 36px 28px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.6), 0 0 45px ${glowColor};
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, transparent, ${themeColor}, transparent);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 22px;
+  }
+  .brand img {
+    height: 36px;
+    width: auto;
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.4));
+  }
+  .badge-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 18px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: ${isApproved ? 'rgba(16, 185, 129, 0.15)' : (isRejected ? 'rgba(244, 63, 94, 0.15)' : 'rgba(148, 163, 184, 0.15)')};
+    color: ${themeColor};
+    border: 1px solid ${themeColor};
+    box-shadow: 0 0 16px ${glowColor};
+    margin-bottom: 20px;
+  }
+  .pulse-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: ${themeColor};
+    box-shadow: 0 0 8px ${themeColor};
+    animation: vams-pulse 1.8s infinite;
+  }
+  @keyframes vams-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+  }
+  .action-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: ${isApproved ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(5, 150, 105, 0.45))' : 'linear-gradient(135deg, rgba(244, 63, 94, 0.25), rgba(225, 29, 72, 0.45))'};
+    border: 1px solid ${themeColor};
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px auto;
+    font-size: 28px;
+    color: #ffffff;
+    box-shadow: 0 0 24px ${glowColor};
+  }
+  h1 {
+    font-size: 24px;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+  .desc {
+    font-size: 14px;
+    color: #94a3b8;
+    line-height: 1.6;
+    margin-bottom: 24px;
+  }
+  .desc strong {
+    color: #f1f5f9;
+  }
+  .data-grid {
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 24px;
+    text-align: left;
+  }
+  .data-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 13px;
+  }
+  .data-row:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+  .data-row:first-child {
+    padding-top: 0;
+  }
+  .data-label {
+    color: #64748b;
+    font-weight: 600;
+  }
+  .data-val {
+    color: #e2e8f0;
+    font-weight: 700;
+  }
+  .pass-token-box {
+    margin-top: 10px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px dashed #10b981;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .pass-token-label {
+    font-size: 11px;
+    color: #34d399;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .pass-token-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    color: #34d399;
+    font-weight: 700;
+  }
+  .btn-portal {
+    display: inline-block;
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #e2e8f0;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .btn-portal:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+  }
+  .footer-notice {
+    margin-top: 18px;
+    font-size: 11px;
+    color: #64748b;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <img src="/email_logo_text.png" alt="Swagatham VMS" />
+    </div>
+
+    <div class="badge-status">
+      <span class="pulse-dot"></span>
+      <span>${badgeText}</span>
+    </div>
+
+    <div class="action-icon">
+      ${icon}
+    </div>
+
+    <h1>${actionTitle}</h1>
+    <div class="desc">${message}</div>
+
+    ${!isError ? `
+      <div class="data-grid">
+        <div class="data-row">
+          <span class="data-label">Visitor</span>
+          <span class="data-val">${visitorName}</span>
+        </div>
+        ${company && company !== 'N/A' ? `
+          <div class="data-row">
+            <span class="data-label">Organization</span>
+            <span class="data-val">${company}</span>
+          </div>
+        ` : ''}
+        <div class="data-row">
+          <span class="data-label">Purpose</span>
+          <span class="data-val">${purpose}</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">Host</span>
+          <span class="data-val">${hostName}</span>
+        </div>
+        ${visitorCode && isApproved ? `
+          <div class="pass-token-box">
+            <span class="pass-token-label">Gate Pass Code</span>
+            <span class="pass-token-val">${visitorCode}</span>
+          </div>
+        ` : ''}
+      </div>
+    ` : ''}
+
+    <a href="${portalUrl}" class="btn-portal">Open OpsVision Console</a>
+
+    <div class="footer-notice">
+      🔒 Action recorded automatically in Swagatham Access System.<br>
+      You may close this browser tab safely at any time.
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// 1-Click Direct Host Action Endpoint (Zero Secondary Clicks Required)
+app.get('/api/public/quick-host-action', async (req, res) => {
+  const { token, action } = req.query;
+  const baseUrl = getAppBaseUrl(req);
+  const portalUrl = baseUrl;
+
+  if (!token) {
+    return res.status(400).send(renderActionPage({
+      status: 'ERROR',
+      title: 'Missing Authorization Token',
+      message: 'No authorization token was provided in the link.',
+      portalUrl
+    }));
+  }
+
+  const visit = db.prepare(`
+    SELECT x.id visit_id, x.visitor_code, x.status, x.expected_arrival_time, x.expected_checkin,
+           x.host_token, x.pass_token,
+           v.name visitor_name, v.mobile visitor_mobile, v.email visitor_email, v.company, v.purpose, v.host_id,
+           u.id host_user_id, u.name host_name, u.email host_email, u.department host_department
+    FROM visits x
+    JOIN visitors v ON v.id = x.visitor_id
+    LEFT JOIN users u ON u.id = v.host_id
+    WHERE x.host_token = ?
+  `).get(token);
+
+  if (!visit) {
+    return res.status(404).send(renderActionPage({
+      status: 'ERROR',
+      title: 'Invalid or Expired Link',
+      message: 'This authorization link is invalid, expired, or has already been used.',
+      portalUrl
+    }));
+  }
+
+  const hostActorId = visit.host_id || visit.host_user_id || null;
+  const hostName = visit.host_name || 'Host';
+
+  // If already actioned previously
+  if (visit.status === 'APPROVED') {
+    return res.send(`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>✔ Already Approved</title>
+        <style>
+          body { margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 85vh; color: #0f172a; }
+          .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px 28px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06); max-width: 340px; width: 100%; box-sizing: border-box; }
+          .icon { width: 56px; height: 56px; border-radius: 50%; background: #ecfdf5; color: #059669; font-size: 32px; font-weight: 900; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; box-shadow: 0 4px 12px rgba(5,150,105,0.18); }
+          h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 800; color: #0f172a; }
+          p { margin: 0 0 20px 0; font-size: 13px; color: #64748b; line-height: 1.5; }
+          .btn-close { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 24px; font-size: 13px; font-weight: 700; color: #334155; cursor: pointer; }
+          .btn-close:hover { background: #e2e8f0; }
+        </style>
+        <script>
+          window.onload = function() {
+            window.open('', '_self', '');
+            window.close();
+            setTimeout(function() { window.close(); }, 350);
+          };
+        </script>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">✔</div>
+          <h2>Already Approved</h2>
+          <p>Pass for <strong>${visit.visitor_name || 'Visitor'}</strong> was previously approved.<br>This tab can now be closed.</p>
+          <button class="btn-close" onclick="window.close()">Close Tab</button>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  // If action is DECLINE or not APPROVE, redirect immediately to decision page for reason / counter time
+  if (action !== 'APPROVE') {
+    return res.redirect(`${baseUrl}/?hostToken=${token}&action=DECLINE`);
+  }
+
+  // Fresh APPROVE action to execute immediately
+  const newStatus = 'APPROVED';
+  const noteText = 'Authorized directly via 1-click email action';
+
+  db.prepare('UPDATE visits SET status=?, approved_by=? WHERE id=?').run(newStatus, hostActorId, visit.visit_id);
+  db.prepare("UPDATE approvals SET status='APPROVED', action_time=CURRENT_TIMESTAMP, notes=? WHERE visit_id=?").run(noteText, visit.visit_id);
+  logPassStateChange(visit.visit_id, visit.status, newStatus, hostActorId, 'HOST', noteText);
+  audit(hostActorId || 0, 'EMAIL_QUICK_AUTHORIZE', 'VISIT', visit.visit_id, `Authorized by ${hostName} via 1-click email`);
+
+  // In-app alert to Guard & Receptionist
+  createNotification({
+    target_role: 'GUARD_RECEPTION',
+    type: 'VISIT_APPROVED',
+    title: '✅ Visitor Pass Approved',
+    message: `${visit.visitor_name} has been approved by host ${hostName}.`,
+    link_id: visit.visit_id
+  });
+
+  // Notify Visitor via email
+  if (visit.visitor_email) {
+    sendEmail({
+      to: visit.visitor_email,
+      subject: `[Swagatham VMS] Your Visitor Pass is Approved! Code: ${visit.visitor_code}`,
+      html: buildEmailHtml({
+        badgeText: 'PASS APPROVED',
+        badgeBg: '#ecfdf5',
+        badgeColor: '#047857',
+        title: 'Your Visitor Pass is Approved! 🎉',
+        greeting: `Dear <strong>${visit.visitor_name}</strong>,`,
+        messageHtml: `<p>Your host <strong>${hostName}</strong> has authorized your visit request.</p>`,
+        details: [
+          { label: 'Visitor Pass Code', value: visit.visitor_code, highlight: true },
+          { label: 'Host Name', value: hostName },
+          { label: 'Expected Arrival (IST)', value: formatIST(visit.expected_arrival_time || visit.expected_checkin || new Date()), highlight: true }
+        ],
+        footerNote: 'Please present this Visitor Pass Code at reception upon arrival.'
+      })
+    }).catch(e => console.error('[VISITOR NOTIFY EMAIL ERROR]', e));
+  }
+
+  return res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>✔ Visit Approved</title>
+      <style>
+        body { margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 85vh; color: #0f172a; }
+        .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px 28px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06); max-width: 340px; width: 100%; box-sizing: border-box; }
+        .icon { width: 56px; height: 56px; border-radius: 50%; background: #ecfdf5; color: #059669; font-size: 32px; font-weight: 900; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; box-shadow: 0 4px 12px rgba(5,150,105,0.18); }
+        h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 800; color: #0f172a; }
+        p { margin: 0 0 20px 0; font-size: 13px; color: #64748b; line-height: 1.5; }
+        .btn-close { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 24px; font-size: 13px; font-weight: 700; color: #334155; cursor: pointer; transition: all 0.15s ease; }
+        .btn-close:hover { background: #e2e8f0; }
+      </style>
+      <script>
+        window.onload = function() {
+          window.open('', '_self', '');
+          window.close();
+          setTimeout(function() { window.close(); }, 350);
+        };
+      </script>
+    </head>
+    <body>
+      <div class="card">
+        <div class="icon">✔</div>
+        <h2>Visit Approved</h2>
+        <p>Pass for <strong>${visit.visitor_name || 'Visitor'}</strong> is approved. Gate clearance is active.<br>This tab can now be closed.</p>
+        <button class="btn-close" onclick="window.close()">Close Tab</button>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
 // Visitor Entry Endpoint (Gate Check-In)
 app.post('/api/visits/:id/entry', auth, roles('GUARD', 'RECEPTION', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
   const visit = db.prepare('SELECT x.*, v.name visitor_name, v.email visitor_email, v.company visitor_company, v.purpose visitor_purpose, v.mobile visitor_mobile, v.host_id, u.name host_name, u.email host_email, u.department host_department FROM visits x JOIN visitors v ON v.id=x.visitor_id LEFT JOIN users u ON u.id=v.host_id WHERE x.id=?').get(req.params.id);
   if (!visit) return res.status(404).json({ message: 'Visit not found' });
   if (visit.status !== 'APPROVED') return res.status(400).json({ message: `Cannot check in. Visit status is ${visit.status}` });
 
-  const entryTimeStr = new Date().toLocaleString();
+  const entryTimeStr = formatIST(new Date());
   db.prepare("UPDATE visits SET status='CHECKED_IN',entry_time=CURRENT_TIMESTAMP,entry_guard_id=? WHERE id=?").run(req.user.id, visit.id);
   logPassStateChange(visit.id, visit.status, 'CHECKED_IN', req.user.id, req.user.role, 'Gate Check-in');
   audit(req.user.id, 'ENTRY', 'VISIT', visit.id);
@@ -1510,22 +2409,28 @@ app.get('/api/public/email-preview', (req, res) => {
       watermarkSrc
     });
   } else {
+    const demoToken = 'HTOKEN-DEMO-SAMPLE';
+    const baseUrl = getAppBaseUrl(req);
     html = buildEmailHtml({
-      badgeText: 'ACTION REQUIRED',
+      badgeText: 'APPROVAL REQUIRED',
       badgeBg: '#eff6ff',
       badgeColor: '#1d4ed8',
       title: 'New Visitor Approval Request',
       greeting: 'Hello <strong>Colonel SG Jyothy</strong>,',
-      messageHtml: '<p>A visitor has registered to meet you at reception/gate:</p>',
+      messageHtml: '<p>A visitor has arrived / registered to meet you at reception. Please review and choose an action directly below:</p>',
       details: [
-        { label: 'Visitor Name', value: 'Raghavendra M' },
-        { label: 'Company', value: 'Spandana Tech' },
-        { label: 'Purpose', value: 'Official Discussion' },
-        { label: 'Registered At (IST)', value: formatIST(new Date()) }
+        { label: 'Visitor Name', value: 'Raghavendra M', highlight: true },
+        { label: 'Company', value: 'Spandana Technologies' },
+        { label: 'Purpose', value: 'Security Architecture Review' },
+        { label: 'Registered At (IST)', value: formatIST(new Date()), highlight: true }
       ],
-      actionUrl: '#',
-      actionText: 'Open Host Dashboard to Review',
-      footerNote: 'Please log in to your Swagatham VMS Dashboard to review and single-tap approve or reject this visitor pass.',
+      actions: [
+        { text: '✔', url: `${baseUrl}/api/public/quick-host-action?token=${demoToken}&action=APPROVE`, bg: '#059669', type: 'approve', title: 'Approve Visitor' },
+        { text: '✕', url: `${baseUrl}/?hostToken=${demoToken}&action=DECLINE`, bg: '#e11d48', type: 'decline', title: 'Decline or Propose New Time' }
+      ],
+      secondaryUrl: baseUrl,
+      secondaryText: 'Open Host Portal',
+      footerNote: '⚡ Click ✔ to Approve immediately, or ✕ to Decline / Propose a new time.',
       logoTextSrc,
       watermarkSrc
     });
