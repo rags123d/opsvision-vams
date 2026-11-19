@@ -10,3 +10,8 @@ archive/
 **/archive/**
 frontend/public/archive/
 
+# Runtime email preview artifacts
+frontend/public/preview_last_email.html
+frontend/public/email_preview.html
+
+
