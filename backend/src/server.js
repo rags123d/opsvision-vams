@@ -146,31 +146,35 @@ function buildEmailHtml({
             <tr>
               ${actions.map((act, idx) => {
                 const isDecline = act.type === 'decline' || (act.text && (act.text.includes('✕') || act.text.includes('✖') || act.text.toLowerCase().includes('deny') || act.text.toLowerCase().includes('decline')));
-                const bg = isDecline
-                  ? 'linear-gradient(135deg, #e11d48 0%, #be123c 100%)'
-                  : 'linear-gradient(135deg, #059669 0%, #0d9488 100%)';
-                const bgColor = isDecline ? '#e11d48' : '#059669';
-                const borderColor = isDecline ? '#fb7185' : '#34d399';
-                const shadow = isDecline ? 'rgba(225, 29, 72, 0.38)' : 'rgba(13, 148, 136, 0.38)';
+                const borderColor = isDecline ? '#e11d48' : '#059669';
+                const textColor = isDecline ? '#e11d48' : '#059669';
+                const shadow = isDecline ? 'rgba(225, 29, 72, 0.16)' : 'rgba(5, 150, 105, 0.16)';
                 const btnClass = isDecline ? 'action-btn-decline' : 'action-btn-approve';
                 const tooltip = act.title || (isDecline ? 'Decline or Propose New Time' : 'Approve Visitor');
+                // Use explicit Unicode variation selector \uFE0E (text presentation) so Windows/Chrome does not turn checkmark into emoji
+                const symbol = isDecline ? '&#10005;' : '&#10004;&#xFE0E;';
                 const spacer = idx > 0 ? `
-                  <td width="32" style="width: 32px; min-width: 32px; max-width: 32px; font-size: 1px; line-height: 1;">&nbsp;</td>
+                  <td width="36" style="width: 36px; min-width: 36px; max-width: 36px; font-size: 1px; line-height: 1;">&nbsp;</td>
                 ` : '';
 
                 return `
                   ${spacer}
-                  <td align="center" style="border-radius: 9999px; background: ${bgColor}; padding: 0;">
-                    <a href="${act.url}" target="_blank" title="${tooltip}" class="${btnClass}" style="display: inline-block; padding: 12px 34px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 26px; font-weight: 900; line-height: 1; color: #ffffff !important; text-decoration: none; border-radius: 9999px; background: ${bg}; background-color: ${bgColor}; border: 1px solid ${borderColor}; box-shadow: 0 4px 16px ${shadow}; min-width: 80px; text-align: center; box-sizing: border-box;">
-                      ${act.text}
+                  <td align="center" style="border-radius: 9999px; background: #ffffff; padding: 0;">
+                    <a href="${act.url}" target="_blank" title="${tooltip}" class="${btnClass}" style="display: inline-block; padding: 12px 36px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 26px; font-weight: 900; line-height: 1; color: ${textColor} !important; text-decoration: none; border-radius: 9999px; background: #ffffff; background-color: #ffffff; border: 2.5px solid ${borderColor}; box-shadow: 0 4px 14px ${shadow}; min-width: 84px; text-align: center; box-sizing: border-box;">
+                      <span style="color: ${textColor} !important; font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif; font-size: 26px; font-weight: 900; line-height: 1;">${symbol}</span>
                     </a>
                   </td>
                 `;
               }).join('')}
             </tr>
           </table>
-          <div style="text-align: center; margin-top: 14px; font-size: 11px; color: #64748b; letter-spacing: 0.3px;">
-            <span style="color: #059669; font-weight: 700;">✔ Approve</span> &nbsp;&bull;&nbsp; <span style="color: #e11d48; font-weight: 700;">✕ Decline / Reschedule</span>
+          <div style="text-align: center; margin-top: 14px; font-size: 12px; font-weight: 600;">
+            <span style="color: #059669; display: inline-block; padding: 3px 12px; background: #ecfdf5; border-radius: 9999px; margin: 0 4px; border: 1px solid #a7f3d0;">✔ Approve Pass</span>
+            &nbsp;&bull;&nbsp;
+            <span style="color: #e11d48; display: inline-block; padding: 3px 12px; background: #fff1f2; border-radius: 9999px; margin: 0 4px; border: 1px solid #fecdd3;">✕ Decline / Reschedule</span>
+          </div>
+          <div style="text-align: center; margin-top: 8px; font-size: 11px; color: #64748b; line-height: 1.4;">
+            1-tap instant action. Once approved, the pass is immediately locked in the system.
           </div>
           ${secondaryUrl ? `
             <div style="text-align: center; margin-top: 12px; font-size: 11px; color: #64748b;">
@@ -209,6 +213,16 @@ function buildEmailHtml({
     font-family: 'Plus Jakarta Sans', Arial, -apple-system, sans-serif;
     color: #1e293b;
     -webkit-font-smoothing: antialiased;
+  }
+  a.action-btn-approve:hover {
+    background-color: #ecfdf5 !important;
+    border-color: #047857 !important;
+    box-shadow: 0 6px 18px rgba(5, 150, 105, 0.22) !important;
+  }
+  a.action-btn-decline:hover {
+    background-color: #fff1f2 !important;
+    border-color: #be123c !important;
+    box-shadow: 0 6px 18px rgba(225, 29, 72, 0.22) !important;
   }
 </style>
 </head>
@@ -2179,30 +2193,37 @@ app.get('/api/public/quick-host-action', async (req, res) => {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>✔ Already Approved</title>
+        <title>✔ Pass Already Approved & Locked</title>
         <style>
           body { margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 85vh; color: #0f172a; }
-          .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px 28px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06); max-width: 340px; width: 100%; box-sizing: border-box; }
-          .icon { width: 56px; height: 56px; border-radius: 50%; background: #ecfdf5; color: #059669; font-size: 32px; font-weight: 900; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; box-shadow: 0 4px 12px rgba(5,150,105,0.18); }
-          h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 800; color: #0f172a; }
-          p { margin: 0 0 20px 0; font-size: 13px; color: #64748b; line-height: 1.5; }
-          .btn-close { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 24px; font-size: 13px; font-weight: 700; color: #334155; cursor: pointer; }
-          .btn-close:hover { background: #e2e8f0; }
+          .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 36px 30px; text-align: center; box-shadow: 0 16px 36px -8px rgba(0,0,0,0.08); max-width: 400px; width: 100%; box-sizing: border-box; }
+          .icon { width: 68px; height: 68px; border-radius: 50%; background: #ffffff; color: #059669; font-size: 36px; font-weight: 900; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; border: 3px solid #059669; box-shadow: 0 4px 16px rgba(5,150,105,0.18); }
+          .badge { display: inline-block; padding: 4px 14px; border-radius: 9999px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; margin-bottom: 12px; }
+          h2 { margin: 0 0 8px 0; font-size: 22px; font-weight: 800; color: #0f172a; }
+          p { margin: 0 0 18px 0; font-size: 13.5px; color: #64748b; line-height: 1.55; }
+          .details-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 18px; text-align: left; margin-bottom: 20px; font-size: 13px; }
+          .details-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #edf2f7; }
+          .details-row:last-child { border-bottom: none; }
+          .details-label { color: #64748b; font-weight: 600; }
+          .details-val { color: #0f172a; font-weight: 700; }
+          .lock-notice { font-size: 12px; color: #047857; background: #f0fdf4; border: 1px dashed #86efac; border-radius: 8px; padding: 10px 14px; margin-bottom: 22px; text-align: center; font-weight: 600; }
+          .btn-close { background: #0f172a; border: none; border-radius: 10px; padding: 12px 28px; font-size: 14px; font-weight: 700; color: #ffffff; cursor: pointer; width: 100%; transition: all 0.15s ease; box-shadow: 0 4px 12px rgba(15,23,42,0.15); }
+          .btn-close:hover { background: #334155; }
         </style>
-        <script>
-          window.onload = function() {
-            window.open('', '_self', '');
-            window.close();
-            setTimeout(function() { window.close(); }, 350);
-          };
-        </script>
       </head>
       <body>
         <div class="card">
-          <div class="icon">✔</div>
-          <h2>Already Approved</h2>
-          <p>Pass for <strong>${visit.visitor_name || 'Visitor'}</strong> was previously approved.<br>This tab can now be closed.</p>
-          <button class="btn-close" onclick="window.close()">Close Tab</button>
+          <div class="icon">&#10004;&#xFE0E;</div>
+          <div class="badge">Pass Already Finalized</div>
+          <h2>Action Complete & Disabled</h2>
+          <p>Pass for <strong>${visit.visitor_name || 'Visitor'}</strong> was already authorized by host <strong>${hostName}</strong>.<br>This 1-click email action is now completed and locked.</p>
+          <div class="details-card">
+            <div class="details-row"><span class="details-label">Visitor</span><span class="details-val">${visit.visitor_name || 'N/A'}</span></div>
+            <div class="details-row"><span class="details-label">Pass Code</span><span class="details-val" style="color: #2563eb;">${visit.visitor_code}</span></div>
+            <div class="details-row"><span class="details-label">Status</span><span class="details-val" style="color: #059669;">✔ APPROVED</span></div>
+          </div>
+          <div class="lock-notice">🔒 Gate clearance is active. No further action needed.</div>
+          <button class="btn-close" onclick="window.close()">Close Window</button>
         </div>
       </body>
       </html>
@@ -2260,30 +2281,37 @@ app.get('/api/public/quick-host-action', async (req, res) => {
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>✔ Visit Approved</title>
+      <title>✔ Visit Approved Successfully</title>
       <style>
         body { margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 85vh; color: #0f172a; }
-        .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px 28px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06); max-width: 340px; width: 100%; box-sizing: border-box; }
-        .icon { width: 56px; height: 56px; border-radius: 50%; background: #ecfdf5; color: #059669; font-size: 32px; font-weight: 900; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; box-shadow: 0 4px 12px rgba(5,150,105,0.18); }
-        h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 800; color: #0f172a; }
-        p { margin: 0 0 20px 0; font-size: 13px; color: #64748b; line-height: 1.5; }
-        .btn-close { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 24px; font-size: 13px; font-weight: 700; color: #334155; cursor: pointer; transition: all 0.15s ease; }
-        .btn-close:hover { background: #e2e8f0; }
+        .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 36px 30px; text-align: center; box-shadow: 0 16px 36px -8px rgba(0,0,0,0.08); max-width: 400px; width: 100%; box-sizing: border-box; }
+        .icon { width: 68px; height: 68px; border-radius: 50%; background: #ffffff; color: #059669; font-size: 36px; font-weight: 900; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; border: 3px solid #059669; box-shadow: 0 4px 16px rgba(5,150,105,0.18); }
+        .badge { display: inline-block; padding: 4px 14px; border-radius: 9999px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; margin-bottom: 12px; }
+        h2 { margin: 0 0 8px 0; font-size: 22px; font-weight: 800; color: #0f172a; }
+        p { margin: 0 0 18px 0; font-size: 13.5px; color: #64748b; line-height: 1.55; }
+        .details-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 18px; text-align: left; margin-bottom: 20px; font-size: 13px; }
+        .details-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #edf2f7; }
+        .details-row:last-child { border-bottom: none; }
+        .details-label { color: #64748b; font-weight: 600; }
+        .details-val { color: #0f172a; font-weight: 700; }
+        .lock-notice { font-size: 12px; color: #047857; background: #f0fdf4; border: 1px dashed #86efac; border-radius: 8px; padding: 10px 14px; margin-bottom: 22px; text-align: center; font-weight: 600; }
+        .btn-close { background: #059669; border: none; border-radius: 10px; padding: 12px 28px; font-size: 14px; font-weight: 700; color: #ffffff; cursor: pointer; width: 100%; transition: all 0.15s ease; box-shadow: 0 4px 14px rgba(5,150,105,0.25); }
+        .btn-close:hover { background: #047857; }
       </style>
-      <script>
-        window.onload = function() {
-          window.open('', '_self', '');
-          window.close();
-          setTimeout(function() { window.close(); }, 350);
-        };
-      </script>
     </head>
     <body>
       <div class="card">
-        <div class="icon">✔</div>
-        <h2>Visit Approved</h2>
-        <p>Pass for <strong>${visit.visitor_name || 'Visitor'}</strong> is approved. Gate clearance is active.<br>This tab can now be closed.</p>
-        <button class="btn-close" onclick="window.close()">Close Tab</button>
+        <div class="icon">&#10004;&#xFE0E;</div>
+        <div class="badge">Pass Authorized</div>
+        <h2>Gate Clearance Granted</h2>
+        <p>Pass for <strong>${visit.visitor_name || 'Visitor'}</strong> is now approved. Real-time updates dispatched to security & reception desk.</p>
+        <div class="details-card">
+          <div class="details-row"><span class="details-label">Visitor</span><span class="details-val">${visit.visitor_name || 'N/A'}</span></div>
+          <div class="details-row"><span class="details-label">Pass Code</span><span class="details-val" style="color: #2563eb;">${visit.visitor_code}</span></div>
+          <div class="details-row"><span class="details-label">Status</span><span class="details-val" style="color: #059669;">✔ APPROVED</span></div>
+        </div>
+        <div class="lock-notice">🔒 Pass is active and action is finalized. You may close this tab.</div>
+        <button class="btn-close" onclick="window.close()">Close Window</button>
       </div>
     </body>
     </html>
