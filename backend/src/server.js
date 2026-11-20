@@ -31,7 +31,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT UNIQUE,password TEXT NOT NULL,name TEXT NOT NULL,role TEXT NOT NULL,department TEXT,email TEXT,phone TEXT,last_login TEXT,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS visitors(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,mobile TEXT NOT NULL,email TEXT,company TEXT,purpose TEXT NOT NULL,host_id INTEGER,department TEXT,vehicle TEXT,photo TEXT,consent INTEGER DEFAULT 0,otp TEXT,otp_verified INTEGER DEFAULT 0,blocked INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(host_id) REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY AUTOINCREMENT,visitor_id INTEGER NOT NULL,visitor_code TEXT UNIQUE NOT NULL,entry_time TEXT,exit_time TEXT,entry_guard_id INTEGER,exit_guard_id INTEGER,status TEXT DEFAULT 'PENDING_HOST_REVIEW',valid_until TEXT,expected_checkin TEXT,expected_checkout TEXT,initiator_type TEXT DEFAULT 'SELF_REGISTERED',expected_arrival_time TEXT,proposed_arrival_time TEXT,rejection_reason TEXT,created_by INTEGER,approved_by INTEGER,pass_token TEXT UNIQUE,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(visitor_id) REFERENCES visitors(id),FOREIGN KEY(entry_guard_id) REFERENCES users(id),FOREIGN KEY(exit_guard_id) REFERENCES users(id));
-CREATE TABLE IF NOT EXISTS approvals(id INTEGER PRIMARY KEY AUTOINCREMENT,visit_id INTEGER NOT NULL,host_id INTEGER NOT NULL,status TEXT DEFAULT 'PENDING',action_time TEXT,notes TEXT,FOREIGN KEY(visit_id) REFERENCES visits(id),FOREIGN KEY(host_id) REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS approvals(id INTEGER PRIMARY KEY AUTOINCREMENT,visit_id INTEGER NOT NULL,host_id INTEGER NOT NULL,status TEXT DEFAULT 'PENDING',action_time TEXT,notes TEXT,FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE,FOREIGN KEY(host_id) REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,actor_id INTEGER,action TEXT,entity TEXT,entity_id INTEGER,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS pass_state_history(id INTEGER PRIMARY KEY AUTOINCREMENT,visit_id INTEGER NOT NULL,from_status TEXT,to_status TEXT NOT NULL,actor_id INTEGER,actor_type TEXT NOT NULL,notes TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,code TEXT UNIQUE,description TEXT,active INTEGER DEFAULT 1,color TEXT DEFAULT '#3b82f6');
@@ -1279,14 +1279,30 @@ app.put('/api/visitors/:id', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION', 'G
 
 // Delete Visitor Endpoint
 app.delete('/api/visitors/:id', auth, roles('ADMIN', 'SUPER_ADMIN', 'RECEPTION'), (req, res) => {
-  const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
-  if (!v) return res.status(404).json({ message: 'Visitor record not found' });
+  try {
+    const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(req.params.id);
+    if (!v) return res.status(404).json({ message: 'Visitor record not found' });
 
-  db.prepare('DELETE FROM visits WHERE visitor_id=?').run(req.params.id);
-  db.prepare('DELETE FROM visitors WHERE id=?').run(req.params.id);
+    const visits = db.prepare('SELECT id FROM visits WHERE visitor_id=?').all(req.params.id);
+    const visitIds = visits.map(x => x.id);
 
-  audit(req.user.id, 'DELETE_VISITOR', 'VISITOR', req.params.id, v.name);
-  res.json({ message: 'Visitor deleted successfully' });
+    const deleteTx = db.transaction(() => {
+      for (const vid of visitIds) {
+        db.prepare('DELETE FROM approvals WHERE visit_id=?').run(vid);
+        db.prepare('DELETE FROM pass_state_history WHERE visit_id=?').run(vid);
+        db.prepare('DELETE FROM notifications WHERE link_id=?').run(vid);
+      }
+      db.prepare('DELETE FROM visits WHERE visitor_id=?').run(req.params.id);
+      db.prepare('DELETE FROM visitors WHERE id=?').run(req.params.id);
+      audit(req.user.id, 'DELETE_VISITOR', 'VISITOR', req.params.id, v.name);
+    });
+
+    deleteTx();
+    res.json({ message: 'Visitor deleted successfully' });
+  } catch (err) {
+    console.error('[DELETE VISITOR ERROR]', err);
+    res.status(500).json({ message: 'Failed to delete visitor: ' + (err.message || 'Server error') });
+  }
 });
 
 // Flow A: Public Self-Registration Endpoint (Visitor Initiated)

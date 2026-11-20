@@ -2668,6 +2668,7 @@ function Visitors({ user, viewPass }) {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
   const [hosts, setHosts] = useState([]);
   const [purposes, setPurposes] = useState([]);
   const [editRow, setEditRow] = useState(null);
@@ -2765,9 +2766,10 @@ function Visitors({ user, viewPass }) {
 
   const doDelete = async (r) => {
     if (!confirm(`Delete visitor record for ${r.name}? This cannot be undone.`)) return;
-    setBusyId(r.visit_id); setErr('');
+    setBusyId(r.visit_id); setErr(''); setMsg('');
     try {
-      await api(`/visitors/${r.id}`, { method: 'DELETE' });
+      const res = await api(`/visitors/${r.id}`, { method: 'DELETE' });
+      setMsg(res.message || `Visitor record for ${r.name} deleted successfully.`);
       load();
     } catch (e) { setErr('Error: ' + e.message); }
     finally { setBusyId(null); }
@@ -2803,6 +2805,7 @@ function Visitors({ user, viewPass }) {
         </div>
       </div>
 
+      {msg && <div className="alert-box alert-success" style={{ marginBottom: '12px' }}><strong>{msg}</strong></div>}
       {err && <div className="alert-box alert-error" style={{ marginBottom: '12px' }}><strong>{err}</strong></div>}
 
       <div className="table-container">
