@@ -10,3 +10,5 @@ archive/
 **/archive/**
 frontend/public/archive/
 
+frontend/public/email_preview.html
+frontend/public/preview_last_email.html
